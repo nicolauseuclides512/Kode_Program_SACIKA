@@ -1,0 +1,62 @@
+# Dependencies
+node_modules/
+
+# Node / Vite build output
+dist/
+build/
+.vite/
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Python cache and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+# Python tooling cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local datasets and generated exports
+*.xlsx
+*.xls
+*.csv
+*.tsv
+exports/
+reports/
+uploads/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+
+# Codex/local agent workspace metadata
+.agents/
+.codex/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
