@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS snapshot_persediaan_bulanan (
   id BIGSERIAL PRIMARY KEY,
   produk_id INTEGER NOT NULL REFERENCES produk(id) ON DELETE RESTRICT,
   periode DATE NOT NULL,
-  stok_akhir NUMERIC(14, 2) NOT NULL,
+  stok_akhir NUMERIC(14, 2),
   harga_rata_rata NUMERIC(14, 2),
   nilai_aset NUMERIC(18, 2),
   nama_barang_sumber TEXT,
@@ -16,8 +16,11 @@ CREATE TABLE IF NOT EXISTS snapshot_persediaan_bulanan (
     UNIQUE (produk_id, periode),
   CONSTRAINT chk_snapshot_persediaan_bulanan_periode_awal_bulan
     CHECK (periode = DATE_TRUNC('month', periode)::DATE),
-  CONSTRAINT chk_snapshot_persediaan_bulanan_stok_nonnegative
-    CHECK (stok_akhir >= 0),
+  CONSTRAINT chk_snapshot_persediaan_bulanan_stok_status
+    CHECK (
+      (status_data = 'missing' AND stok_akhir IS NULL)
+      OR (status_data IN ('observed', 'corrected') AND stok_akhir IS NOT NULL AND stok_akhir >= 0)
+    ),
   CONSTRAINT chk_snapshot_persediaan_bulanan_harga_nonnegative
     CHECK (harga_rata_rata IS NULL OR harga_rata_rata >= 0),
   CONSTRAINT chk_snapshot_persediaan_bulanan_nilai_aset_nonnegative
