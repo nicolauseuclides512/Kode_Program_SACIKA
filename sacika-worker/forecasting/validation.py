@@ -8,6 +8,7 @@ PERIOD_RE = re.compile(r"^(\d{4})-(\d{2})$")
 ALLOWED_TARGETS = {"ending_inventory"}
 ALLOWED_FREQUENCIES = {"monthly"}
 DEFAULT_MIN_OBSERVATIONS = int(os.environ.get("FORECAST_MIN_OBSERVATIONS", "18"))
+MAX_FORECAST_HORIZON = int(os.environ.get("FORECAST_MAX_HORIZON", "3"))
 
 
 class PayloadValidationError(Exception):
@@ -117,9 +118,11 @@ def validate_prediction_payload(payload, min_observations=DEFAULT_MIN_OBSERVATIO
         normalized_values = []
         observation_count = 0
 
-    horizon = payload.get("horizon")
+    horizon = payload.get("horizon", 1)
     if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
         errors.append("horizon wajib berupa integer positif")
+    elif horizon > MAX_FORECAST_HORIZON:
+        errors.append(f"horizon maksimum sementara adalah {MAX_FORECAST_HORIZON} bulan")
 
     if errors:
         raise PayloadValidationError(errors)

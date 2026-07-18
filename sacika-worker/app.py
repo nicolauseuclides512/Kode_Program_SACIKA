@@ -3,7 +3,7 @@ import os
 from flask import Flask, jsonify, request
 from dotenv import load_dotenv
 
-from forecasting.selector import handle_prediction_request
+from forecasting.selector import ForecastSelectionError, handle_prediction_request
 from forecasting.validation import PayloadValidationError
 
 load_dotenv()
@@ -22,6 +22,11 @@ def predict():
             "status": "invalid",
             "errors": error.errors,
         }), 400
+    except ForecastSelectionError as error:
+        return jsonify({
+            "status": "failed",
+            "error": str(error),
+        }), 422
     except Exception as error:
         return jsonify({
             "status": "error",
