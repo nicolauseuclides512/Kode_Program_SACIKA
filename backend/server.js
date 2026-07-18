@@ -11,6 +11,7 @@ const prediksiRoutes = require("./routes/prediksiRoutes");
 const datasetRoutes = require("./routes/datasetRoutes");
 const laporanRoutes = require("./routes/laporanRoutes");
 const inventoryHistoryRoutes = require("./routes/inventoryHistoryRoutes");
+const forecastRoutes = require("./routes/forecastRoutes");
 
 const app = express();
 
@@ -28,6 +29,7 @@ app.use("/api/prediksi", prediksiRoutes);
 app.use("/api/dataset", datasetRoutes);
 app.use("/api/laporan", laporanRoutes);
 app.use("/api/inventory-history", inventoryHistoryRoutes);
+app.use("/api/forecast", forecastRoutes);
 
 app.get("/", (req, res) => {
   res.send("API Sistem Koperasi ARIMA");
