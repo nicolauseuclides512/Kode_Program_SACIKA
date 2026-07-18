@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import api from "../../api/axios";
 import { ENDPOINTS } from "../../api/endpoints";
 
@@ -7,17 +7,15 @@ import { Button } from "../../components/ui/button";
 import { SearchableSelect } from "../../components/ui/searchable-select";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select";
 import {
-  TrendingUp,
-  TrendingDown,
-  RefreshCw,
   AlertCircle,
-  CheckCircle2,
   AlertTriangle,
-  Sparkles,
-  Info,
-  ShoppingCart,
   Calendar,
-  Layers
+  CheckCircle2,
+  Info,
+  Layers,
+  RefreshCw,
+  TrendingDown,
+  TrendingUp,
 } from "lucide-react";
 
 import {
@@ -29,7 +27,7 @@ import {
   Title,
   Tooltip,
   Legend,
-  Filler
+  Filler,
 } from "chart.js";
 import { Line } from "react-chartjs-2";
 
@@ -41,273 +39,352 @@ ChartJS.register(
   Title,
   Tooltip,
   Legend,
-  Filler
+  Filler,
 );
-const MONTHS_IND = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agst", "Sept", "Okt", "Nov", "Des"];
 
-const getNextPeriodLabel = (currentLabel) => {
-  if (!currentLabel) return "";
-  const match = currentLabel.match(/^minggu\s+ke\s+(\d+)\s+(\w+)\s+(\d{4})$/i);
-  if (match) {
-    let [_, weekStr, monthStr, yearStr] = match;
-    let week = parseInt(weekStr);
-    let year = parseInt(yearStr);
-
-    monthStr = monthStr.charAt(0).toUpperCase() + monthStr.slice(1).toLowerCase();
-    let monthIdx = MONTHS_IND.findIndex(m => m.toLowerCase() === monthStr.toLowerCase());
-    if (monthIdx === -1) {
-      monthIdx = MONTHS_SHORT.findIndex(m => m.toLowerCase() === monthStr.toLowerCase());
-    }
-    if (monthIdx === -1) monthIdx = 0;
-
-    if (week < 4) {
-      week += 1;
-    } else {
-      week = 1;
-      monthIdx += 1;
-      if (monthIdx >= 12) {
-        monthIdx = 0;
-        year += 1;
-      }
-    }
-    return `minggu ke ${week} ${MONTHS_IND[monthIdx]} ${year}`;
-  }
-  return currentLabel;
+const STATUS_COPY = {
+  not_eligible: {
+    title: "Produk tidak eligible untuk forecasting",
+    className: "text-amber-700 bg-amber-50/70 border-amber-100",
+  },
+  worker_unavailable: {
+    title: "Worker forecasting tidak tersedia",
+    className: "text-red-700 bg-red-50/70 border-red-100",
+  },
+  data_incomplete: {
+    title: "Data histori belum lengkap",
+    className: "text-amber-700 bg-amber-50/70 border-amber-100",
+  },
+  error: {
+    title: "Gagal melakukan prediksi",
+    className: "text-red-700 bg-red-50/70 border-red-100",
+  },
 };
+
+function toNumberOrNull(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatUnit(value, digits = 0) {
+  const numericValue = toNumberOrNull(value);
+  if (numericValue === null) return "N/A";
+
+  return numericValue.toLocaleString("id-ID", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: digits,
+  });
+}
+
+function formatMetric(value, suffix = "") {
+  const numericValue = toNumberOrNull(value);
+  if (numericValue === null) return "N/A";
+
+  return `${numericValue.toLocaleString("id-ID", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}${suffix}`;
+}
+
+function normalizeWarnings(result) {
+  const warnings = [];
+
+  if (Array.isArray(result?.warning)) {
+    warnings.push(...result.warning);
+  } else if (result?.warning) {
+    warnings.push(result.warning);
+  }
+
+  if (Array.isArray(result?.quality?.messages)) {
+    warnings.push(...result.quality.messages.filter((message) => {
+      return message && message !== "Data layak untuk analisis awal";
+    }));
+  }
+
+  return Array.from(new Set(warnings));
+}
+
+function getLastObservedValue(history) {
+  const values = history?.values || [];
+  for (let index = values.length - 1; index >= 0; index -= 1) {
+    const value = toNumberOrNull(values[index]);
+    if (value !== null) return value;
+  }
+
+  return null;
+}
+
+function buildChartData(history, forecastResult) {
+  const historyPeriods = history?.periods || [];
+  const historyValues = history?.values || [];
+  const forecastPeriods = forecastResult?.forecast_periods || [];
+  const forecastValues = (forecastResult?.forecast_values || []).map(toNumberOrNull);
+  const lastObservedValue = getLastObservedValue(history);
+
+  const labels = [...historyPeriods, ...forecastPeriods];
+  const actualPoints = [
+    ...historyValues.map(toNumberOrNull),
+    ...Array(forecastPeriods.length).fill(null),
+  ];
+  const predictedPoints = historyPeriods.length > 0
+    ? [
+      ...Array(historyPeriods.length - 1).fill(null),
+      lastObservedValue,
+      ...forecastValues,
+    ]
+    : forecastValues;
+
+  return {
+    labels,
+    datasets: [
+      {
+        label: "Histori Persediaan",
+        data: actualPoints,
+        borderColor: "rgba(63, 63, 70, 0.9)",
+        backgroundColor: "transparent",
+        borderWidth: 2,
+        tension: 0.2,
+        fill: false,
+        pointRadius: 4,
+        pointBackgroundColor: "rgba(63, 63, 70, 0.9)",
+        pointHoverRadius: 6,
+      },
+      {
+        label: "Prediksi Model Terpilih",
+        data: predictedPoints,
+        borderColor: "rgba(220, 38, 38, 1)",
+        backgroundColor: "rgba(220, 38, 38, 0.04)",
+        borderWidth: 2.5,
+        borderDash: [5, 4],
+        tension: 0.2,
+        fill: true,
+        pointRadius: 4.5,
+        pointBackgroundColor: "rgba(220, 38, 38, 1)",
+        pointHoverRadius: 6.5,
+      },
+    ],
+  };
+}
+
+function getTrendAnalysis(history, forecastResult) {
+  const lastObservedValue = getLastObservedValue(history);
+  const firstForecastValue = toNumberOrNull(forecastResult?.forecast_values?.[0]);
+
+  if (lastObservedValue === null || firstForecastValue === null) {
+    return {
+      direction: "Tidak tersedia",
+      percentage: null,
+      description: "Histori valid belum cukup untuk menghitung arah perubahan.",
+    };
+  }
+
+  if (lastObservedValue === 0) {
+    return {
+      direction: firstForecastValue > 0 ? "Meningkat" : "Stabil",
+      percentage: null,
+      description: `Nilai histori terakhir ${formatUnit(lastObservedValue)} unit.`,
+    };
+  }
+
+  const change = ((firstForecastValue - lastObservedValue) / lastObservedValue) * 100;
+  const direction = change > 5 ? "Meningkat" : change < -5 ? "Menurun" : "Stabil";
+
+  return {
+    direction,
+    percentage: Math.abs(change),
+    description: `Dibanding observasi terakhir ${formatUnit(lastObservedValue)} unit.`,
+  };
+}
+
+function getRiskStatus(forecastValue, stokMinimum) {
+  const forecast = toNumberOrNull(forecastValue);
+  const minimum = toNumberOrNull(stokMinimum);
+
+  if (forecast === null || minimum === null) {
+    return {
+      isRisk: false,
+      text: "Batas minimum produk belum tersedia",
+      className: "bg-zinc-50 text-zinc-600 border-zinc-200",
+    };
+  }
+
+  if (forecast <= minimum) {
+    return {
+      isRisk: true,
+      text: "Prediksi persediaan berada di bawah batas minimum",
+      className: "bg-red-50 text-red-700 border-red-100",
+    };
+  }
+
+  return {
+    isRisk: false,
+    text: "Prediksi persediaan masih berada di atas batas minimum",
+    className: "bg-emerald-50 text-emerald-700 border-emerald-100",
+  };
+}
+
+function classifyError(error) {
+  const status = error.response?.status;
+  const message = error.response?.data?.message
+    || error.response?.data?.error
+    || error.message
+    || "Terjadi kesalahan server";
+
+  if (status === 422) {
+    return {
+      status: "not_eligible",
+      message,
+      details: error.response?.data?.details,
+    };
+  }
+
+  if (status === 503) {
+    return {
+      status: "worker_unavailable",
+      message,
+      details: error.response?.data?.details,
+    };
+  }
+
+  if (status === 404) {
+    return {
+      status: "data_incomplete",
+      message,
+      details: error.response?.data?.details,
+    };
+  }
+
+  return {
+    status: "error",
+    message,
+    details: error.response?.data?.details,
+  };
+}
 
 const Prediksi = () => {
   const [produk, setProduk] = useState([]);
   const [selectedProduk, setSelectedProduk] = useState(null);
-  const [periode, setPeriode] = useState(1);
-
-  // Forecast states
+  const [horizon, setHorizon] = useState(1);
   const [forecastResult, setForecastResult] = useState(null);
+  const [historyResult, setHistoryResult] = useState(null);
   const [chartData, setChartData] = useState(null);
-  const [akurasi, setAkurasi] = useState(null);
-  const [stokDibutuhkan, setStokDibutuhkan] = useState(0);
-  const [trendAnalysis, setTrendAnalysis] = useState(null);
-
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
+  const [status, setStatus] = useState("idle");
+  const [message, setMessage] = useState(null);
+  const [details, setDetails] = useState(null);
 
   useEffect(() => {
+    const fetchProduk = async () => {
+      try {
+        const res = await api.get(ENDPOINTS.produk);
+        setProduk(res.data);
+      } catch {
+        setStatus("error");
+        setMessage("Gagal mengambil data produk");
+      }
+    };
+
     fetchProduk();
   }, []);
-
-  const fetchProduk = async () => {
-    try {
-      const res = await api.get(ENDPOINTS.produk);
-      setProduk(res.data);
-    } catch {
-      setError("Gagal mengambil data produk");
-    }
-  };
 
   const productOptions = produk.map((p) => ({
     value: p.id,
     label: p.nama_produk,
-    sublabel: `Stok saat ini: ${p.stok || 0} unit | Rp ${Number(p.harga).toLocaleString("id-ID")}`
+    sublabel: `Stok saat ini: ${p.stok || 0} unit | Minimum: ${p.stok_minimum || 0} unit`,
   }));
 
   const clearForecastResults = () => {
     setForecastResult(null);
+    setHistoryResult(null);
     setChartData(null);
-    setAkurasi(null);
-    setStokDibutuhkan(0);
-    setTrendAnalysis(null);
-    setError(null);
+    setStatus("idle");
+    setMessage(null);
+    setDetails(null);
   };
 
   const handlePrediksi = async () => {
     if (!selectedProduk) {
-      setError("Pilih produk terlebih dahulu");
+      setStatus("error");
+      setMessage("Pilih produk terlebih dahulu");
       return;
     }
+
     setLoading(true);
     clearForecastResults();
 
     try {
-      const res = await api.get(ENDPOINTS.prediksiChart(selectedProduk.value, periode));
-      const data = res.data;
+      const historyResponse = await api.get(ENDPOINTS.inventoryHistory(selectedProduk.value));
+      const forecastResponse = await api.post(
+        ENDPOINTS.inventoryForecast(selectedProduk.value),
+        { horizon },
+      );
 
-      const historicalData = data.historical || [];
-      const forecastData = data.forecast || [];
+      const forecast = forecastResponse.data;
+      const history = historyResponse.data;
 
-      if (!forecastData || forecastData.length === 0) {
-        throw new Error("Data proyeksi penjualan tidak tersedia");
+      if (!Array.isArray(forecast.forecast_periods) || forecast.forecast_periods.length === 0) {
+        throw new Error("Periode prediksi tidak tersedia dari API");
       }
 
-      setForecastResult(data);
-      setAkurasi(data.evaluasi?.akurasi ?? null);
-      setStokDibutuhkan(data.stok_dibutuhkan || 0);
-
-      const uniqueHistoryMap = new Map();
-      historicalData.forEach(h => {
-        const period = h.period;
-        const total = Number(h.total) || 0;
-        if (uniqueHistoryMap.has(period)) {
-          uniqueHistoryMap.set(period, uniqueHistoryMap.get(period) + total);
-        } else {
-          uniqueHistoryMap.set(period, total);
-        }
-      });
-
-      const uniqueHistoricalData = Array.from(uniqueHistoryMap.entries()).map(([period, total]) => ({
-        period,
-        total
-      }));
-
-      let displayHistory = [];
-      const currentDate = new Date();
-      const currentYear = currentDate.getFullYear();
-      const currentMonthIdx = currentDate.getMonth();
-
-      const getMonthYearString = (offset) => {
-        const targetMonthIdx = currentMonthIdx + offset;
-        const monthName = MONTHS_IND[targetMonthIdx % 12];
-        const year = (currentYear - 1) + Math.floor(targetMonthIdx / 12);
-        return `${monthName} ${year}`;
-      };
-
-      if (periode === 1) {
-        const monthYearStr = getMonthYearString(0);
-        const currentWeekNum = currentDate.getDate() <= 7 ? 1 : currentDate.getDate() <= 14 ? 2 : currentDate.getDate() <= 21 ? 3 : 4;
-        displayHistory = uniqueHistoricalData.filter(h => h.period === `minggu ke ${currentWeekNum} ${monthYearStr}`);
-      } else if (periode === 4) {
-        const monthYearStr = getMonthYearString(0);
-        displayHistory = uniqueHistoricalData.filter(h =>
-          h.period.includes(monthYearStr)
-        );
-      } else if (periode === 12) {
-        const myStr1 = getMonthYearString(0);
-        const myStr2 = getMonthYearString(1);
-        const myStr3 = getMonthYearString(2);
-        displayHistory = uniqueHistoricalData.filter(h =>
-          h.period.includes(myStr1) ||
-          h.period.includes(myStr2) ||
-          h.period.includes(myStr3)
-        );
+      if (!Array.isArray(forecast.forecast_values) || forecast.forecast_values.length === 0) {
+        throw new Error("Nilai prediksi tidak tersedia dari API");
       }
 
-      if (displayHistory.length === 0) {
-        displayHistory = uniqueHistoricalData.slice(-periode);
-      }
-
-      const lastActualVal = displayHistory[displayHistory.length - 1]?.total ?? 0;
-      const totalForecastVal = forecastData.reduce((sum, val) => sum + val, 0);
-      const avgForecastVal = totalForecastVal / forecastData.length;
-
-      let trendPercentage = 0;
-      let trendDirection = "STABIL";
-      if (lastActualVal > 0) {
-        trendPercentage = ((avgForecastVal - lastActualVal) / lastActualVal) * 100;
-        if (trendPercentage > 5) trendDirection = "NAIK";
-        else if (trendPercentage < -5) trendDirection = "TURUN";
-      }
-
-      setTrendAnalysis({
-        percentage: Math.abs(trendPercentage).toFixed(1),
-        direction: trendDirection,
-        lastActual: lastActualVal,
-        avgForecast: avgForecastVal.toFixed(1)
-      });
-
-      const historicalLabels = displayHistory.map(h => h.period);
-      const forecastLabels = historicalLabels.map(label => {
-        const parts = label.split(" ");
-        const yearIdx = parts.length - 1;
-        const year = parseInt(parts[yearIdx]);
-        if (!isNaN(year)) {
-          parts[yearIdx] = String(year + 1);
-          return parts.join(" ");
-        }
-        return label;
-      });
-      const allLabels = [...historicalLabels, ...forecastLabels];
-
-      const actualSalesPoints = [
-        ...displayHistory.map(h => h.total),
-        ...Array(forecastData.length).fill(null)
-      ];
-
-      const predictedSalesPoints = [
-        ...Array(displayHistory.length - 1).fill(null),
-        lastActualVal,
-        ...forecastData
-      ];
-
-      setChartData({
-        labels: allLabels,
-        datasets: [
-          {
-            label: "Penjualan Aktual",
-            data: actualSalesPoints,
-            borderColor: "rgba(63, 63, 70, 0.9)", // zinc-700
-            backgroundColor: "transparent",
-            borderWidth: 2,
-            tension: 0.2,
-            fill: false,
-            pointRadius: 4,
-            pointBackgroundColor: "rgba(63, 63, 70, 0.9)",
-            pointHoverRadius: 6,
-          },
-          {
-            label: `Proyeksi ARIMA`,
-            data: predictedSalesPoints,
-            borderColor: "rgba(220, 38, 38, 1)", // red-600
-            backgroundColor: "rgba(220, 38, 38, 0.04)",
-            borderWidth: 2.5,
-            borderDash: [5, 4],
-            tension: 0.2,
-            fill: true,
-            pointRadius: 4.5,
-            pointBackgroundColor: "rgba(220, 38, 38, 1)",
-            pointHoverRadius: 6.5,
-          }
-        ]
-      });
-
-    } catch (err) {
-      const message = err.response?.data?.message || err.response?.data?.error || err.message || "Terjadi kesalahan server";
-      setError(message);
-      console.error("Forecasting Error:", err);
+      setForecastResult(forecast);
+      setHistoryResult(history);
+      setChartData(buildChartData(history, forecast));
+      setStatus("success");
+    } catch (error) {
+      const classified = classifyError(error);
+      setStatus(classified.status);
+      setMessage(classified.message);
+      setDetails(classified.details);
+      console.error("Forecasting Error:", error);
     } finally {
       setLoading(false);
     }
   };
 
-  // Helper to rate the MAPE accuracy qualitative rating
-  const getAccuracyRating = (mapeVal) => {
-    const acc = mapeVal !== null ? Number(mapeVal) : null;
-    if (acc === null) return { text: "N/A", color: "bg-zinc-50 text-zinc-600 border-zinc-200/60" };
-    if (acc >= 90) return { text: "Sangat Tinggi", color: "bg-zinc-50 text-zinc-600 border-zinc-200/60" };
-    if (acc >= 80) return { text: "Tinggi", color: "bg-zinc-50 text-zinc-600 border-zinc-200/60" };
-    if (acc >= 70) return { text: "Cukup Andal", color: "bg-zinc-50 text-zinc-600 border-zinc-200/60" };
-    return { text: "Rendah", color: "bg-zinc-50 text-zinc-600 border-zinc-200/60" };
-  };
-
-  const accuracyRating = getAccuracyRating(akurasi);
+  const selectedForecastValue = toNumberOrNull(forecastResult?.forecast_values?.[0]);
+  const selectedForecastPeriod = forecastResult?.forecast_periods?.[0] || "-";
+  const observationCount = forecastResult?.quality?.observation_count
+    ?? historyResult?.observation_count
+    ?? 0;
+  const evaluation = forecastResult?.evaluation || {};
+  const warnings = useMemo(() => normalizeWarnings(forecastResult), [forecastResult]);
+  const trendAnalysis = useMemo(
+    () => getTrendAnalysis(historyResult, forecastResult),
+    [historyResult, forecastResult],
+  );
+  const riskStatus = getRiskStatus(selectedForecastValue, selectedProduk?.stok_minimum);
+  const forecastRows = (forecastResult?.forecast_periods || []).map((period, index) => ({
+    period,
+    value: toNumberOrNull(forecastResult?.forecast_values?.[index]),
+  }));
+  const historyPeriods = historyResult?.periods || [];
+  const historyCutoff = historyPeriods.length > 0
+    ? historyPeriods[historyPeriods.length - 1]
+    : "-";
+  const stateCopy = STATUS_COPY[status];
 
   return (
     <div className="flex flex-1 flex-col gap-6 p-8 bg-white min-h-screen">
-      {/* Hero Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-zinc-100 pb-5">
         <div>
-          <h2 className="text-2xl font-extrabold tracking-tight text-zinc-900">
-            Prediksi Permintaan Penjualan
+          <h2 className="text-2xl font-extrabold text-zinc-900">
+            Prediksi Posisi Persediaan Bulanan
           </h2>
           <p className="text-sm text-zinc-400 mt-1 max-w-xl">
-            Analisis runtun waktu untuk memproyeksikan permintaan mingguan dan mengoptimalkan level persediaan.
+            Analisis runtun waktu untuk mengestimasi posisi persediaan akhir bulan.
           </p>
         </div>
       </div>
 
-      {/* Configuration Controls */}
       <Card className="rounded-2xl border border-zinc-100 bg-white p-5 shadow-2xs">
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 items-end">
           <div className="lg:col-span-6 space-y-1.5">
-            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider flex items-center gap-1.5">
+            <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-1.5">
               Pilih Produk Koperasi
             </label>
             <SearchableSelect
@@ -319,12 +396,14 @@ const Prediksi = () => {
                   setSelectedProduk(null);
                   return;
                 }
+
                 const selected = produk.find((p) => p.id === Number(value));
                 setSelectedProduk(selected ? {
                   value: selected.id,
                   nama_produk: selected.nama_produk,
                   harga: selected.harga,
-                  stok: selected.stok
+                  stok: selected.stok,
+                  stok_minimum: selected.stok_minimum,
                 } : null);
               }}
               placeholder="Cari & pilih produk..."
@@ -333,20 +412,19 @@ const Prediksi = () => {
           </div>
 
           <div className="lg:col-span-3 space-y-1.5">
-            <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider flex items-center gap-1.5">
-              Jangka Waktu Prediksi
+            <label className="text-xs font-bold text-zinc-500 uppercase flex items-center gap-1.5">
+              Horizon Prediksi
             </label>
-            <Select value={String(periode)} onValueChange={(value) => {
-              setPeriode(Number(value));
+            <Select value={String(horizon)} onValueChange={(value) => {
+              setHorizon(Number(value));
               clearForecastResults();
             }}>
               <SelectTrigger className="border-zinc-200 h-9 bg-white text-sm font-medium text-zinc-900 rounded-lg">
                 <SelectValue placeholder="Pilih horizon" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="1">1 Minggu Ke Depan</SelectItem>
-                <SelectItem value="4">4 Minggu Ke Depan</SelectItem>
-                <SelectItem value="12">12 Minggu Ke Depan (3 Bulan)</SelectItem>
+                <SelectItem value="1">1 Bulan</SelectItem>
+                <SelectItem value="3">3 Bulan</SelectItem>
               </SelectContent>
             </Select>
           </div>
@@ -363,116 +441,142 @@ const Prediksi = () => {
                   Memproses...
                 </>
               ) : (
-                <>
-                  Mulai Prediksi
-                </>
+                "Mulai Prediksi"
               )}
             </Button>
           </div>
         </div>
 
-        {error && (
-          <div className="flex items-start gap-3 text-xs text-red-600 bg-red-50/50 p-3.5 rounded-xl border border-red-100 mt-4">
+        {loading && (
+          <div className="flex items-start gap-3 text-xs text-zinc-600 bg-zinc-50/70 p-3.5 rounded-xl border border-zinc-100 mt-4">
+            <RefreshCw className="w-4 h-4 animate-spin mt-0.5" />
             <div className="space-y-0.5">
-              <p className="font-bold">Gagal melakukan prediksi</p>
-              <p className="text-red-500/90">{error}</p>
+              <p className="font-bold">Memproses histori persediaan</p>
+              <p className="text-zinc-500">Backend sedang memvalidasi data dan memanggil worker forecasting.</p>
+            </div>
+          </div>
+        )}
+
+        {stateCopy && !loading && (
+          <div className={`flex items-start gap-3 text-xs p-3.5 rounded-xl border mt-4 ${stateCopy.className}`}>
+            <AlertCircle className="w-4 h-4 mt-0.5" />
+            <div className="space-y-1">
+              <p className="font-bold">{stateCopy.title}</p>
+              <p>{message}</p>
+              {details?.observation_count !== undefined && (
+                <p>
+                  Observasi valid: <strong>{details.observation_count}</strong>
+                  {details.minimum_observation_count !== undefined && (
+                    <> dari minimum <strong>{details.minimum_observation_count}</strong></>
+                  )}
+                </p>
+              )}
+              {Array.isArray(details?.messages) && details.messages.length > 0 && (
+                <p>{details.messages.join("; ")}</p>
+              )}
             </div>
           </div>
         )}
       </Card>
 
-      {/* Main Analysis and Visualization Panel */}
       {forecastResult && (
         <div className="space-y-6">
-          {/* Metrics Grid Row */}
-          <div className="grid gap-4 md:grid-cols-3">
-            {/* Card 1: MAPE Accuracy */}
+          <div className="rounded-xl border border-zinc-100 bg-zinc-50/60 p-4 text-xs text-zinc-600 flex items-start gap-2">
+            <Info className="w-4 h-4 mt-0.5 shrink-0 text-zinc-500" />
+            <p>
+              Hasil ini merupakan estimasi posisi persediaan akhir bulan, bukan prediksi penjualan atau rekomendasi jumlah pembelian.
+            </p>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
             <Card className="rounded-2xl border border-zinc-150 bg-white p-5 shadow-2xs">
               <div className="flex justify-between items-start mb-2">
-                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">
-                  Akurasi Prediksi
+                <span className="text-[10px] font-bold text-zinc-400 uppercase">
+                  Nama Produk
                 </span>
+                <Layers className="w-4 h-4 text-zinc-400" />
               </div>
-              <div className="flex items-baseline gap-1.5">
-                <span className="text-3xl font-extrabold text-zinc-900">
-                  {akurasi !== null ? `${Number(akurasi).toFixed(2)}%` : "N/A"}
-                </span>
+              <div className="space-y-1">
+                <p className="text-xl font-extrabold text-zinc-900 leading-tight">
+                  {selectedProduk?.nama_produk || "-"}
+                </p>
+                <p className="text-xs text-zinc-400">
+                  Jumlah observasi: {observationCount} bulan
+                </p>
               </div>
-              <div className="mt-2 flex items-center">
-                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${accuracyRating.color}`}>
-                  {accuracyRating.text}
+            </Card>
+
+            <Card className="rounded-2xl border border-zinc-150 bg-white p-5 shadow-2xs">
+              <div className="flex justify-between items-start mb-2">
+                <span className="text-[10px] font-bold text-zinc-400 uppercase">
+                  Prediksi Model Terpilih
                 </span>
+                <SparklineIcon />
+              </div>
+              <div className="space-y-1">
+                <p className="text-3xl font-extrabold text-zinc-900">
+                  {forecastResult.model_used || "N/A"}
+                </p>
+                <p className="text-xs text-zinc-400">
+                  Periode cutoff data: {forecastResult.data_cutoff || historyCutoff}
+                </p>
+              </div>
+            </Card>
+
+            <Card className="rounded-2xl border border-zinc-150 bg-white p-5 shadow-2xs">
+              <div className="flex justify-between items-start mb-2">
+                <span className="text-[10px] font-bold text-zinc-400 uppercase">
+                  Evaluasi Model
+                </span>
+                <CheckCircle2 className="w-4 h-4 text-zinc-400" />
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div>
+                  <p className="text-[10px] text-zinc-400 font-semibold">MAE</p>
+                  <p className="text-lg font-extrabold text-zinc-900">{formatMetric(evaluation.mae)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-zinc-400 font-semibold">RMSE</p>
+                  <p className="text-lg font-extrabold text-zinc-900">{formatMetric(evaluation.rmse)}</p>
+                </div>
+                <div>
+                  <p className="text-[10px] text-zinc-400 font-semibold">WAPE</p>
+                  <p className="text-lg font-extrabold text-zinc-900">{formatMetric(evaluation.wape, "%")}</p>
+                </div>
               </div>
               <p className="text-xs text-zinc-400 mt-3">
-                Tingkat presisi model berdasarkan data histori.
+                Dihitung dari rolling-origin validation.
               </p>
             </Card>
 
-            {/* Card 2: Proyeksi Tren */}
             <Card className="rounded-2xl border border-zinc-150 bg-white p-5 shadow-2xs">
               <div className="flex justify-between items-start mb-2">
-                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">
-                  Tren Permintaan
+                <span className="text-[10px] font-bold text-zinc-400 uppercase">
+                  Estimasi Persediaan Akhir
                 </span>
+                <Calendar className="w-4 h-4 text-zinc-400" />
               </div>
               <div className="flex items-baseline gap-1">
                 <span className="text-3xl font-extrabold text-zinc-900">
-                  {trendAnalysis?.direction === "NAIK" ? "Meningkat" : trendAnalysis?.direction === "TURUN" ? "Menurun" : "Stabil"}
-                </span>
-                {trendAnalysis?.percentage > 0 && (
-                  <span className="text-xs font-bold text-zinc-500 ml-1">
-                    ({trendAnalysis?.direction === "NAIK" ? "+" : "-"}{trendAnalysis?.percentage}%)
-                  </span>
-                )}
-              </div>
-              <div className="mt-2.5">
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-md border border-zinc-200 bg-zinc-50 text-zinc-500">
-                  Rata-rata: {trendAnalysis?.avgForecast} unit/minggu
-                </span>
-              </div>
-              <p className="text-xs text-zinc-400 mt-3">
-                Arah pergeseran volume penjualan ke depan.
-              </p>
-            </Card>
-
-            {/* Card 3: Prediksi Stok Dibutuhkan */}
-            <Card className="rounded-2xl border border-zinc-150 bg-white p-5 shadow-2xs">
-              <div className="flex justify-between items-start mb-2">
-                <span className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">
-                  Kebutuhan Stok
-                </span>
-              </div>
-              <div className="flex items-baseline gap-1">
-                <span className="text-3xl font-extrabold text-zinc-900">
-                  {Number(stokDibutuhkan || 0).toLocaleString("id-ID")}
+                  {formatUnit(selectedForecastValue, 2)}
                 </span>
                 <span className="text-xs font-semibold text-zinc-400 ml-1">Unit</span>
               </div>
-              <div className="mt-2">
-                {selectedProduk && (selectedProduk.stok || 0) < stokDibutuhkan ? (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md border bg-zinc-50 text-zinc-600 border-zinc-200">
-                    ⚠️ Butuh Restock
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-md border bg-zinc-50 text-zinc-600 border-zinc-200">
-                    ✓ Stok Aman
-                  </span>
-                )}
-              </div>
-              <p className="text-xs text-zinc-400 mt-3">
-                Target suplai aman untuk menghindari kekosongan.
+              <p className="text-xs text-zinc-400 mt-1">
+                Periode prediksi: {selectedForecastPeriod}
               </p>
+              <span className={`inline-flex mt-3 text-[10px] font-bold px-2 py-0.5 rounded-md border ${riskStatus.className}`}>
+                {riskStatus.text}
+              </span>
             </Card>
           </div>
 
-          {/* Visualization and Recommendations Row */}
           <div className="grid grid-cols-1 xl:grid-cols-12 gap-5 items-start">
-            {/* Visualisasi Chart (8 Columns) - FIXED: maintainAspectRatio: true + aspectRatio: 2.4 prevents blurry stretching */}
             <Card className="xl:col-span-8 rounded-2xl border border-zinc-150 bg-white p-5 shadow-2xs">
               <CardHeader className="p-0 mb-3 select-none">
-                <CardTitle className="text-lg font-bold text-zinc-900">Visualisasi Proyeksi ARIMA</CardTitle>
+                <CardTitle className="text-lg font-bold text-zinc-900">Tren Posisi Persediaan</CardTitle>
                 <CardDescription className="text-xs text-zinc-400 mt-0.5">
-                  Grafik gabungan antara histori penjualan mingguan (aktual) dengan peramalan cerdas ARIMA (proyeksi masa depan).
+                  Grafik histori persediaan bulanan dan hasil prediksi dari model terpilih.
                 </CardDescription>
               </CardHeader>
               <CardContent className="p-0 mt-3">
@@ -480,66 +584,64 @@ const Prediksi = () => {
                   {chartData && (
                     <Line
                       data={chartData}
-                      redraw={true}
+                      redraw
                       options={{
                         responsive: true,
-                        maintainAspectRatio: true, // Let ChartJS calculate clean DPI height to avoid blurriness
-                        aspectRatio: 2.4, // Perfect ratio lock for widescreen desktops
+                        maintainAspectRatio: true,
+                        aspectRatio: 2.4,
                         interaction: {
-                          mode: 'index',
+                          mode: "index",
                           intersect: false,
                         },
                         plugins: {
                           legend: {
                             display: true,
-                            position: 'top',
+                            position: "top",
                             labels: {
                               boxWidth: 10,
-                              font: { size: 10, weight: '600' },
+                              font: { size: 10, weight: "600" },
                               usePointStyle: true,
-                              pointStyle: 'circle'
-                            }
+                              pointStyle: "circle",
+                            },
                           },
                           tooltip: {
                             padding: 10,
                             bodyFont: { size: 11 },
-                            titleFont: { size: 11, weight: '700' },
-                            backgroundColor: 'rgba(9, 9, 11, 0.95)',
-                            borderColor: 'rgba(255, 255, 255, 0.1)',
+                            titleFont: { size: 11, weight: "700" },
+                            backgroundColor: "rgba(9, 9, 11, 0.95)",
+                            borderColor: "rgba(255, 255, 255, 0.1)",
                             borderWidth: 1,
                             usePointStyle: true,
                             callbacks: {
-                              label: function (context) {
-                                let label = context.dataset.label || '';
-                                if (label) {
-                                  label += ': ';
-                                }
+                              label(context) {
+                                let label = context.dataset.label || "";
+                                if (label) label += ": ";
                                 if (context.parsed.y !== null) {
                                   label += `${Math.round(context.parsed.y)} unit`;
                                 }
                                 return label;
-                              }
-                            }
-                          }
+                              },
+                            },
+                          },
                         },
                         scales: {
                           y: {
                             grid: { color: "rgba(0, 0, 0, 0.03)" },
                             ticks: {
-                              font: { size: 10, weight: '500' },
-                              color: '#71717a'
-                            }
+                              font: { size: 10, weight: "500" },
+                              color: "#71717a",
+                            },
                           },
                           x: {
                             grid: { display: false },
                             ticks: {
-                              font: { size: 10, weight: '600' },
-                              color: '#52525b',
+                              font: { size: 10, weight: "600" },
+                              color: "#52525b",
                               maxRotation: 0,
-                              minRotation: 0
-                            }
-                          }
-                        }
+                              minRotation: 0,
+                            },
+                          },
+                        },
                       }}
                     />
                   )}
@@ -547,48 +649,75 @@ const Prediksi = () => {
               </CardContent>
             </Card>
 
-            {/* Rekomendasi Panel (4 Columns) */}
             <Card className="xl:col-span-4 rounded-2xl border border-zinc-150 bg-white p-5 shadow-2xs">
               <div className="flex flex-col gap-4">
                 <div className="flex items-center gap-2 select-none border-b border-zinc-100 pb-3">
                   <div>
-                    <h3 className="text-sm font-bold text-zinc-900">Rekomendasi Pengadaan</h3>
-                    <p className="text-[10px] text-zinc-400 mt-0.5">Panduan aksi cepat persediaan</p>
+                    <h3 className="text-sm font-bold text-zinc-900">Status Risiko Persediaan</h3>
+                    <p className="text-[10px] text-zinc-400 mt-0.5">Berdasarkan batas minimum produk</p>
                   </div>
                 </div>
 
-                {/* Single, minimalist direct action advisory box */}
-                <div className="p-4 rounded-xl border leading-relaxed text-xs font-medium bg-zinc-50/50 border-zinc-200 text-zinc-700">
-                  <div className="flex gap-2">
-                    <div>
-                      <span className="font-bold text-zinc-900 block mb-1">
-                        {(selectedProduk?.stok || 0) < stokDibutuhkan ? "⚠️ Tindakan Restock Diperlukan" : "✓ Persediaan Saat Ini Aman"}
-                      </span>
+                <div className={`p-4 rounded-xl border leading-relaxed text-xs font-medium ${riskStatus.className}`}>
+                  <span className="font-bold block mb-1">
+                    {riskStatus.text}
+                  </span>
+                  <p>
+                    Prediksi {selectedForecastPeriod}: <strong>{formatUnit(selectedForecastValue, 2)} unit</strong>.
+                    Batas minimum: <strong>{formatUnit(selectedProduk?.stok_minimum, 2)} unit</strong>.
+                  </p>
+                </div>
 
-                      {(selectedProduk?.stok || 0) < stokDibutuhkan ? (
-                        <>
-                          Stok saat ini (<strong className="text-zinc-900">{selectedProduk?.stok || 0} unit</strong>) lebih kecil dari total proyeksi permintaan (<strong className="text-zinc-900">{stokDibutuhkan} unit</strong>) untuk {periode} minggu mendatang.
-                          <p className="mt-2 text-zinc-800 font-bold">
-                            Disarankan segera memasan suplai baru minimal sebanyak <span className="underline font-extrabold text-zinc-950">{stokDibutuhkan - (selectedProduk?.stok || 0)} unit</span>.
-                          </p>
-                        </>
-                      ) : (
-                        <>
-                          Persediaan saat ini (<strong className="text-zinc-900">{selectedProduk?.stok || 0} unit</strong>) memadai untuk melayani proyeksi permintaan (<strong className="text-zinc-900">{stokDibutuhkan} unit</strong>) dalam {periode} minggu mendatang.
-                          <p className="mt-2 text-zinc-500 font-normal">
-                            Tidak diperlukan pesanan tambahan segera.
-                          </p>
-                        </>
-                      )}
+                <div className="p-4 rounded-xl border border-zinc-200 bg-zinc-50/50 text-xs text-zinc-700">
+                  <div className="flex items-start gap-2">
+                    {trendAnalysis.direction === "Menurun" ? (
+                      <TrendingDown className="w-4 h-4 mt-0.5 text-zinc-500" />
+                    ) : (
+                      <TrendingUp className="w-4 h-4 mt-0.5 text-zinc-500" />
+                    )}
+                    <div>
+                      <p className="font-bold text-zinc-900">Tren Posisi Persediaan</p>
+                      <p className="mt-1">
+                        {trendAnalysis.direction}
+                        {trendAnalysis.percentage !== null && (
+                          <> ({formatMetric(trendAnalysis.percentage, "%")})</>
+                        )}
+                      </p>
+                      <p className="text-zinc-500 mt-1">{trendAnalysis.description}</p>
                     </div>
                   </div>
                 </div>
-              </div>
 
-              <div className="pt-3 mt-4 border-t border-zinc-100 flex items-center justify-between">
-                <span className="text-[10px] text-zinc-400 font-medium flex items-center gap-1 select-none">
-                  Rekomendasi asisten operasional.
-                </span>
+                <div className="space-y-2">
+                  <p className="text-[10px] font-bold text-zinc-400 uppercase">Periode Prediksi</p>
+                  <div className="space-y-2">
+                    {forecastRows.map((row) => (
+                      <div
+                        key={row.period}
+                        className="flex items-center justify-between rounded-lg border border-zinc-100 bg-white px-3 py-2 text-xs"
+                      >
+                        <span className="font-semibold text-zinc-700">{row.period}</span>
+                        <span className="font-bold text-zinc-900">{formatUnit(row.value, 2)} unit</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {warnings.length > 0 && (
+                  <div className="p-4 rounded-xl border border-amber-100 bg-amber-50/70 text-xs text-amber-800">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                      <div>
+                        <p className="font-bold">Warning kualitas data</p>
+                        <ul className="mt-2 space-y-1">
+                          {warnings.map((warning) => (
+                            <li key={warning}>{warning}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
             </Card>
           </div>
@@ -597,5 +726,9 @@ const Prediksi = () => {
     </div>
   );
 };
+
+function SparklineIcon() {
+  return <TrendingUp className="w-4 h-4 text-zinc-400" />;
+}
 
 export default Prediksi;

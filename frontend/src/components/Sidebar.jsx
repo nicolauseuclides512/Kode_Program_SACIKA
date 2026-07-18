@@ -46,7 +46,7 @@ const Sidebar = () => {
       group: "PREDIKSI",
       items: [
         {
-          name: "Prediksi Penjualan",
+          name: "Prediksi Persediaan",
           path: "/prediksi",
           icon: TrendingUp,
         },

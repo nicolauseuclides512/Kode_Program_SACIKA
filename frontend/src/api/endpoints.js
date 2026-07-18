@@ -41,4 +41,8 @@ export const ENDPOINTS = {
     }
     return url;
   },
+
+  inventoryHistory: (id) => `/inventory-history/${id}`,
+  inventoryForecast: (id) => `/forecast/inventory/${id}`,
+  latestInventoryForecast: (id) => `/forecast/inventory/${id}/latest`,
 };

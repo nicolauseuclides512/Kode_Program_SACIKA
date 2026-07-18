@@ -12,7 +12,7 @@ const DashboardLayout = ({ children }) => {
     if (pathname.startsWith("/kategori")) return "Kelola Kategori";
     if (pathname.startsWith("/transaksi/masuk")) return "Transaksi Masuk";
     if (pathname.startsWith("/transaksi/keluar")) return "Transaksi Keluar";
-    if (pathname.startsWith("/prediksi")) return "Prediksi ARIMA";
+    if (pathname.startsWith("/prediksi")) return "Prediksi Persediaan";
     if (pathname.startsWith("/laporan")) return "Laporan Transaksi";
     return "Dashboard";
   };

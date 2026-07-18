@@ -67,7 +67,7 @@ const data = {
       title: "Forecasting",
       items: [
         {
-          title: "Prediksi Penjualan",
+          title: "Prediksi Persediaan",
           url: "/prediksi",
           icon: TrendingUp,
         },
