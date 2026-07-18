@@ -326,7 +326,7 @@ async function loadProducts(db) {
 async function upsertSnapshot(client, snapshot) {
   await client.query(
     `
-      INSERT INTO snapshot_persediaan_bulanan (
+      INSERT INTO inventory_snapshot_monthly (
         produk_id,
         periode,
         stok_akhir,

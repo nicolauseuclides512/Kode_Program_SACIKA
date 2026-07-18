@@ -1,4 +1,5 @@
 const {
+  getInventoryHistory: getInventoryHistoryService,
   getProductQuality: getProductQualityService,
   getQualitySummary: getQualitySummaryService,
 } = require("../services/inventoryHistoryQualityService");
@@ -9,6 +10,38 @@ function getDefaultDatabase() {
 
 function createInventoryHistoryController(database = getDefaultDatabase()) {
   return {
+    async getInventoryHistory(req, res) {
+      const produkId = Number(req.params.produk_id);
+
+      if (!produkId || Number.isNaN(produkId) || produkId <= 0) {
+        return res.status(400).json({ message: "produk_id harus angka valid" });
+      }
+
+      try {
+        const result = await getInventoryHistoryService(database, produkId, req.query);
+
+        if (result.status === "product_not_found") {
+          return res.status(404).json({ message: "Produk tidak ditemukan" });
+        }
+
+        if (result.status === "history_not_found") {
+          return res.status(404).json({ message: "Produk tidak mempunyai histori persediaan bulanan" });
+        }
+
+        return res.json(result.data);
+      } catch (error) {
+        const statusCode = error.message.includes("period") ? 400 : 500;
+
+        console.error("Error fetching inventory history:", error);
+        return res.status(statusCode).json({
+          message: statusCode === 400
+            ? error.message
+            : "Gagal mengambil histori persediaan bulanan",
+          error: error.message,
+        });
+      }
+    },
+
     async getProductQuality(req, res) {
       const produkId = Number(req.params.produk_id);
 

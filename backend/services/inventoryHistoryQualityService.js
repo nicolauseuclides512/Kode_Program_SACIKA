@@ -11,10 +11,114 @@ function formatPeriod(value) {
   return text.includes("T") ? text.slice(0, 10) : text.slice(0, 10);
 }
 
+function formatMonth(value) {
+  const period = formatPeriod(value);
+  return period ? period.slice(0, 7) : null;
+}
+
+function parsePeriodParam(value, fieldName) {
+  if (!value) return null;
+
+  const text = String(value).trim();
+  const match = text.match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
+
+  if (!match) {
+    throw new Error(`${fieldName} harus berformat YYYY-MM atau YYYY-MM-DD`);
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+
+  if (month < 1 || month > 12) {
+    throw new Error(`${fieldName} memiliki bulan tidak valid`);
+  }
+
+  return `${year}-${String(month).padStart(2, "0")}-01`;
+}
+
+function addMonth(period) {
+  const [year, month] = period.split("-").map(Number);
+  const nextMonth = month === 12 ? 1 : month + 1;
+  const nextYear = month === 12 ? year + 1 : year;
+
+  return `${nextYear}-${String(nextMonth).padStart(2, "0")}-01`;
+}
+
+function createMonthRange(startPeriod, endPeriod) {
+  if (!startPeriod || !endPeriod || startPeriod > endPeriod) return [];
+
+  const periods = [];
+  let current = startPeriod;
+
+  while (current <= endPeriod) {
+    periods.push(current);
+    current = addMonth(current);
+  }
+
+  return periods;
+}
+
 function toNumberOrNull(value) {
   if (value === undefined || value === null || value === "") return null;
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildInventoryHistoryResponse(product, rows, filters = {}) {
+  const normalizedRows = rows
+    .map((row) => ({
+      ...row,
+      periode: formatPeriod(row.periode),
+      stok_akhir: toNumberOrNull(row.stok_akhir),
+      status_data: row.status_data || "observed",
+    }))
+    .filter((row) => row.periode)
+    .sort((a, b) => a.periode.localeCompare(b.periode));
+
+  if (normalizedRows.length === 0) return null;
+
+  const startPeriod = filters.startPeriod || normalizedRows[0].periode;
+  const endPeriod = filters.endPeriod || normalizedRows[normalizedRows.length - 1].periode;
+  const monthRange = createMonthRange(startPeriod, endPeriod);
+  const rowByPeriod = new Map();
+
+  for (const row of normalizedRows) {
+    rowByPeriod.set(row.periode, row);
+  }
+
+  const periods = [];
+  const values = [];
+  const missingPeriods = [];
+  let observationCount = 0;
+
+  for (const periode of monthRange) {
+    const row = rowByPeriod.get(periode);
+    const isMissing = !row || row.status_data === "missing" || row.stok_akhir === null;
+
+    periods.push(formatMonth(periode));
+    values.push(isMissing ? null : row.stok_akhir);
+
+    if (isMissing) {
+      missingPeriods.push(formatMonth(periode));
+    } else {
+      observationCount += 1;
+    }
+  }
+
+  return {
+    produk: {
+      id: Number(product.id),
+      nama: product.nama_produk,
+      stok_saat_ini: toNumberOrNull(product.stok),
+      stok_minimum: toNumberOrNull(product.stok_minimum),
+    },
+    target: "ending_inventory",
+    frequency: "monthly",
+    periods,
+    values,
+    observation_count: observationCount,
+    missing_periods: missingPeriods,
+  };
 }
 
 function roundMetric(value, digits = 4) {
@@ -159,7 +263,7 @@ async function getProductQuality(db, produkId, options = {}) {
   const historyResult = await db.query(
     `
       SELECT id, produk_id, periode, stok_akhir, status_data, updated_at
-      FROM snapshot_persediaan_bulanan
+      FROM inventory_snapshot_monthly
       WHERE produk_id=$1
       ORDER BY periode ASC, updated_at ASC, id ASC
     `,
@@ -169,7 +273,7 @@ async function getProductQuality(db, produkId, options = {}) {
   const duplicateResult = await db.query(
     `
       SELECT periode, COUNT(*)::int AS jumlah
-      FROM snapshot_persediaan_bulanan
+      FROM inventory_snapshot_monthly
       WHERE produk_id=$1
       GROUP BY periode
       HAVING COUNT(*) > 1
@@ -186,6 +290,71 @@ async function getProductQuality(db, produkId, options = {}) {
   );
 }
 
+async function getInventoryHistory(db, produkId, filters = {}) {
+  const startPeriod = parsePeriodParam(filters.start_period, "start_period");
+  const endPeriod = parsePeriodParam(filters.end_period, "end_period");
+
+  if (startPeriod && endPeriod && startPeriod > endPeriod) {
+    throw new Error("start_period tidak boleh lebih besar dari end_period");
+  }
+
+  const productResult = await db.query(
+    `
+      SELECT id, nama_produk, stok, stok_minimum
+      FROM produk
+      WHERE id=$1
+    `,
+    [produkId],
+  );
+
+  if (productResult.rows.length === 0) {
+    return { status: "product_not_found" };
+  }
+
+  const params = [produkId];
+  const where = ["produk_id=$1"];
+
+  if (startPeriod) {
+    params.push(startPeriod);
+    where.push(`periode >= $${params.length}`);
+  }
+
+  if (endPeriod) {
+    params.push(endPeriod);
+    where.push(`periode <= $${params.length}`);
+  }
+
+  const historyResult = await db.query(
+    `
+      SELECT DISTINCT ON (periode)
+        id,
+        produk_id,
+        periode,
+        stok_akhir,
+        status_data,
+        updated_at
+      FROM inventory_snapshot_monthly
+      WHERE ${where.join(" AND ")}
+      ORDER BY periode ASC, updated_at DESC, id DESC
+    `,
+    params,
+  );
+
+  const response = buildInventoryHistoryResponse(productResult.rows[0], historyResult.rows, {
+    startPeriod,
+    endPeriod,
+  });
+
+  if (!response) {
+    return { status: "history_not_found" };
+  }
+
+  return {
+    status: "ok",
+    data: response,
+  };
+}
+
 async function getQualitySummary(db, options = {}) {
   const productResult = await db.query(
     "SELECT id, nama_produk FROM produk ORDER BY id",
@@ -193,14 +362,14 @@ async function getQualitySummary(db, options = {}) {
   const historyResult = await db.query(
     `
       SELECT id, produk_id, periode, stok_akhir, status_data, updated_at
-      FROM snapshot_persediaan_bulanan
+      FROM inventory_snapshot_monthly
       ORDER BY produk_id ASC, periode ASC, updated_at ASC, id ASC
     `,
   );
   const duplicateResult = await db.query(
     `
       SELECT produk_id, periode, COUNT(*)::int AS jumlah
-      FROM snapshot_persediaan_bulanan
+      FROM inventory_snapshot_monthly
       GROUP BY produk_id, periode
       HAVING COUNT(*) > 1
       ORDER BY produk_id ASC, periode ASC
@@ -257,7 +426,11 @@ async function getQualitySummary(db, options = {}) {
 }
 
 module.exports = {
+  buildInventoryHistoryResponse,
   calculateProductQuality,
+  createMonthRange,
   getProductQuality,
+  getInventoryHistory,
   getQualitySummary,
+  parsePeriodParam,
 };

@@ -2,8 +2,11 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  buildInventoryHistoryResponse,
   calculateProductQuality,
+  getInventoryHistory,
   getQualitySummary,
+  parsePeriodParam,
 } = require("../services/inventoryHistoryQualityService");
 const {
   createInventoryHistoryController,
@@ -63,6 +66,123 @@ test("calculateProductQuality marks products with fewer than 18 observations as 
   assert.equal(quality.observation_count, 1);
   assert.equal(quality.eligible, false);
   assert.equal(quality.status, "not_eligible");
+});
+
+test("buildInventoryHistoryResponse keeps monthly ordering and missing values as null", () => {
+  const response = buildInventoryHistoryResponse(
+    {
+      id: 1,
+      nama_produk: "Aqua Botol 600 ml",
+      stok: 20,
+      stok_minimum: 5,
+    },
+    [
+      { periode: "2024-01-01", stok_akhir: 10, status_data: "observed" },
+      { periode: "2024-03-01", stok_akhir: null, status_data: "missing" },
+    ],
+    {
+      startPeriod: "2024-01-01",
+      endPeriod: "2024-03-01",
+    },
+  );
+
+  assert.deepEqual(response.periods, ["2024-01", "2024-02", "2024-03"]);
+  assert.deepEqual(response.values, [10, null, null]);
+  assert.equal(response.observation_count, 1);
+  assert.deepEqual(response.missing_periods, ["2024-02", "2024-03"]);
+});
+
+test("parsePeriodParam accepts YYYY-MM and normalizes to first day", () => {
+  assert.equal(parsePeriodParam("2024-02", "start_period"), "2024-02-01");
+  assert.equal(parsePeriodParam("2024-02-21", "end_period"), "2024-02-01");
+  assert.throws(
+    () => parsePeriodParam("2024-99", "start_period"),
+    /bulan tidak valid/,
+  );
+});
+
+test("getInventoryHistory returns product history from inventory_snapshot_monthly", async () => {
+  const executedSql = [];
+  const fakeDb = {
+    async query(sql) {
+      executedSql.push(sql);
+
+      if (sql.includes("FROM produk")) {
+        return {
+          rows: [{
+            id: 1,
+            nama_produk: "Aqua Botol 600 ml",
+            stok: 20,
+            stok_minimum: 5,
+          }],
+        };
+      }
+
+      return {
+        rows: [
+          {
+            id: 1,
+            produk_id: 1,
+            periode: "2024-01-01",
+            stok_akhir: 10,
+            status_data: "observed",
+          },
+          {
+            id: 2,
+            produk_id: 1,
+            periode: "2024-02-01",
+            stok_akhir: null,
+            status_data: "missing",
+          },
+        ],
+      };
+    },
+  };
+
+  const result = await getInventoryHistory(fakeDb, 1, {
+    start_period: "2024-01",
+    end_period: "2024-02",
+  });
+
+  assert.equal(result.status, "ok");
+  assert.deepEqual(result.data.periods, ["2024-01", "2024-02"]);
+  assert.deepEqual(result.data.values, [10, null]);
+  assert.equal(
+    executedSql.some((sql) => sql.includes("inventory_snapshot_monthly")),
+    true,
+  );
+  assert.equal(
+    executedSql.some((sql) => sql.includes("dataset_mingguan")),
+    false,
+  );
+});
+
+test("getInventoryHistory validates product not found and empty history", async () => {
+  const missingProductDb = {
+    async query(sql) {
+      if (sql.includes("FROM produk")) return { rows: [] };
+      return { rows: [] };
+    },
+  };
+  const emptyHistoryDb = {
+    async query(sql) {
+      if (sql.includes("FROM produk")) {
+        return {
+          rows: [{ id: 1, nama_produk: "Aqua Botol 600 ml", stok: 0, stok_minimum: 0 }],
+        };
+      }
+      return { rows: [] };
+    },
+  };
+
+  assert.deepEqual(
+    await getInventoryHistory(missingProductDb, 999),
+    { status: "product_not_found" },
+  );
+  assert.deepEqual(
+    await getInventoryHistory(emptyHistoryDb, 1),
+    { status: "history_not_found" },
+  );
 });
 
 test("getQualitySummary groups products by eligibility status", async () => {
@@ -128,4 +248,48 @@ test("inventory history controller returns product quality response", async () =
   assert.equal(res.body.produk_id, 1);
   assert.equal(res.body.observation_count, 1);
   assert.equal(Array.isArray(res.body.missing_months), true);
+});
+
+test("inventory history controller returns monthly history response", async () => {
+  const fakeDb = {
+    async query(sql) {
+      if (sql.includes("FROM produk")) {
+        return {
+          rows: [{
+            id: 1,
+            nama_produk: "Aqua Botol 600 ml",
+            stok: 20,
+            stok_minimum: 5,
+          }],
+        };
+      }
+
+      return {
+        rows: [
+          {
+            id: 1,
+            produk_id: 1,
+            periode: "2024-01-01",
+            stok_akhir: 10,
+            status_data: "observed",
+          },
+        ],
+      };
+    },
+  };
+  const controller = createInventoryHistoryController(fakeDb);
+  const res = createResponse();
+
+  await controller.getInventoryHistory(
+    {
+      params: { produk_id: "1" },
+      query: { start_period: "2024-01", end_period: "2024-01" },
+    },
+    res,
+  );
+
+  assert.equal(res.statusCode, 200);
+  assert.equal(res.body.target, "ending_inventory");
+  assert.deepEqual(res.body.periods, ["2024-01"]);
+  assert.deepEqual(res.body.values, [10]);
 });

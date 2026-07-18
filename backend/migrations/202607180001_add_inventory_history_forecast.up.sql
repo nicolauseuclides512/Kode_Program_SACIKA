@@ -1,6 +1,6 @@
 BEGIN;
 
-CREATE TABLE IF NOT EXISTS snapshot_persediaan_bulanan (
+CREATE TABLE IF NOT EXISTS inventory_snapshot_monthly (
   id BIGSERIAL PRIMARY KEY,
   produk_id INTEGER NOT NULL REFERENCES produk(id) ON DELETE RESTRICT,
   periode DATE NOT NULL,
@@ -12,20 +12,20 @@ CREATE TABLE IF NOT EXISTS snapshot_persediaan_bulanan (
   status_data TEXT NOT NULL DEFAULT 'observed',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT uq_snapshot_persediaan_bulanan_produk_periode
+  CONSTRAINT uq_inventory_snapshot_monthly_produk_periode
     UNIQUE (produk_id, periode),
-  CONSTRAINT chk_snapshot_persediaan_bulanan_periode_awal_bulan
+  CONSTRAINT chk_inventory_snapshot_monthly_periode_awal_bulan
     CHECK (periode = DATE_TRUNC('month', periode)::DATE),
-  CONSTRAINT chk_snapshot_persediaan_bulanan_stok_status
+  CONSTRAINT chk_inventory_snapshot_monthly_stok_status
     CHECK (
       (status_data = 'missing' AND stok_akhir IS NULL)
       OR (status_data IN ('observed', 'corrected') AND stok_akhir IS NOT NULL AND stok_akhir >= 0)
     ),
-  CONSTRAINT chk_snapshot_persediaan_bulanan_harga_nonnegative
+  CONSTRAINT chk_inventory_snapshot_monthly_harga_nonnegative
     CHECK (harga_rata_rata IS NULL OR harga_rata_rata >= 0),
-  CONSTRAINT chk_snapshot_persediaan_bulanan_nilai_aset_nonnegative
+  CONSTRAINT chk_inventory_snapshot_monthly_nilai_aset_nonnegative
     CHECK (nilai_aset IS NULL OR nilai_aset >= 0),
-  CONSTRAINT chk_snapshot_persediaan_bulanan_status_data
+  CONSTRAINT chk_inventory_snapshot_monthly_status_data
     CHECK (status_data IN ('observed', 'missing', 'corrected'))
 );
 
@@ -37,8 +37,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trg_snapshot_persediaan_bulanan_updated_at
-BEFORE UPDATE ON snapshot_persediaan_bulanan
+CREATE TRIGGER trg_inventory_snapshot_monthly_updated_at
+BEFORE UPDATE ON inventory_snapshot_monthly
 FOR EACH ROW
 EXECUTE FUNCTION set_updated_at_timestamp();
 
@@ -111,8 +111,8 @@ CREATE TABLE IF NOT EXISTS import_batch (
     CHECK (status IN ('pending', 'processing', 'success', 'partial', 'failed'))
 );
 
-CREATE INDEX IF NOT EXISTS idx_snapshot_persediaan_bulanan_produk_periode_desc
-  ON snapshot_persediaan_bulanan (produk_id, periode DESC);
+CREATE INDEX IF NOT EXISTS idx_inventory_snapshot_monthly_produk_periode_desc
+  ON inventory_snapshot_monthly (produk_id, periode DESC);
 
 CREATE INDEX IF NOT EXISTS idx_product_alias_produk_id
   ON product_alias (produk_id);
