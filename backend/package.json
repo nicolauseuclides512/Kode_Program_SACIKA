@@ -7,7 +7,10 @@
     "test": "node --test",
     "import:inventory": "node scripts/importMonthlyInventory.js",
     "start": "node server.js",
-    "dev": "nodemon server.js"
+    "dev": "nodemon server.js",
+    "db:migrate": "node scripts/migrate.js",
+    "db:status": "node scripts/migrationStatus.js",
+    "db:rollback": "node scripts/rollbackMigration.js"
   },
   "keywords": [],
   "author": "",

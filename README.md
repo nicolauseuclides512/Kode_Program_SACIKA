@@ -1,4 +1,4 @@
-# SACIKA - Prediksi Persediaan Bulanan
+﻿# SACIKA - Prediksi Persediaan Bulanan
 
 SACIKA adalah sistem inventori koperasi dengan pipeline prediksi posisi persediaan akhir bulan. Sistem terbaru menggunakan histori persediaan bulanan dari Excel, memvalidasi kualitas data, memilih model forecasting di worker Flask, menyimpan hasil prediksi, lalu menampilkan risiko stok terhadap batas minimum produk.
 
@@ -117,22 +117,37 @@ Tabel `dataset_mingguan` tidak dihapus. Tabel ini bukan sumber prediksi persedia
 
 ## Menjalankan Migration
 
-Repository memakai file SQL di `backend/migrations`. Jika belum ada migration runner, jalankan manual dengan `psql` sesuai urutan timestamp.
+Backend memiliki migration runner Node.js yang membaca `DATABASE_URL` dari `backend/.env`, membuat tabel `schema_migrations`, menghitung checksum, dan menjalankan file `*.up.sql` di `backend/migrations` sesuai urutan nama timestamp.
+
+Cek status migration:
 
 ```bash
-psql "$DATABASE_URL" -f backend/migrations/202607180001_add_inventory_history_forecast.up.sql
-psql "$DATABASE_URL" -f backend/migrations/202607180002_add_forecast_result_unique_index.up.sql
-psql "$DATABASE_URL" -f backend/migrations/202607190001_add_penjualan_bulanan.up.sql
+cd backend
+npm run db:status
 ```
 
-Rollback:
+Jalankan semua migration yang belum diterapkan:
 
 ```bash
-psql "$DATABASE_URL" -f backend/migrations/202607190001_add_penjualan_bulanan.down.sql
-psql "$DATABASE_URL" -f backend/migrations/202607180002_add_forecast_result_unique_index.down.sql
-psql "$DATABASE_URL" -f backend/migrations/202607180001_add_inventory_history_forecast.down.sql
+cd backend
+npm run db:migrate
 ```
 
+Rollback migration terakhir yang sudah diterapkan:
+
+```bash
+cd backend
+npm run db:rollback
+```
+
+Urutan migration saat ini:
+
+1. `202607170001_create_core_schema.up.sql`
+2. `202607180001_add_inventory_history_forecast.up.sql`
+3. `202607180002_add_forecast_result_unique_index.up.sql`
+4. `202607190001_add_penjualan_bulanan.up.sql`
+
+Runner menolak migration yang sudah pernah diterapkan jika isi file berubah dari checksum yang tersimpan. Runner juga memakai PostgreSQL advisory lock agar dua proses migration tidak berjalan bersamaan. File SQL dijalankan apa adanya sehingga migration lama yang sudah memiliki `BEGIN` dan `COMMIT` tetap kompatibel.
 ## Importer Excel
 
 Dry-run:
@@ -435,3 +450,4 @@ Worker menerima deret waktu langsung dari request body. Worker tidak mengambil d
 - Prediksi penjualan baru layak dibuat dari transaksi keluar aktual yang benar-benar tercatat di sistem.
 - Produk yang belum dapat dipetakan dari Excel harus diselesaikan lewat alias/manual review.
 - Warning kualitas data tidak mengubah nilai prediksi.
+
