@@ -1,13 +1,35 @@
-const db = require("../config/database");
+const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 
-exports.login = (req, res) => {
-  const { username, password } = req.body;
+const db = require("../config/database");
 
-  const query = "SELECT * FROM pengguna WHERE username=$1";
+function buildLoginUser(user) {
+  return {
+    id: user.id,
+    nama: user.nama,
+    username: user.username,
+  };
+}
 
-  db.query(query, [username], (err, result) => {
-    if (err) return res.status(500).json(err);
+exports.login = async (req, res) => {
+  const { username, password } = req.body || {};
+
+  if (!username || !password) {
+    return res.status(400).json({
+      message: "Username dan password wajib diisi",
+    });
+  }
+
+  try {
+    const result = await db.query(
+      `
+        SELECT id, nama, username, password_hash, is_active
+        FROM pengguna
+        WHERE LOWER(BTRIM(username)) = LOWER(BTRIM($1))
+        LIMIT 1
+      `,
+      [username],
+    );
 
     if (result.rows.length === 0) {
       return res.status(401).json({
@@ -17,7 +39,15 @@ exports.login = (req, res) => {
 
     const user = result.rows[0];
 
-    if (password !== user.password) {
+    if (user.is_active === false) {
+      return res.status(403).json({
+        message: "Pengguna tidak aktif",
+      });
+    }
+
+    const passwordValid = await bcrypt.compare(password, user.password_hash || "");
+
+    if (!passwordValid) {
       return res.status(401).json({
         message: "Password salah",
       });
@@ -32,14 +62,17 @@ exports.login = (req, res) => {
       { expiresIn: "1d" },
     );
 
-    res.json({
+    return res.json({
       message: "Login berhasil",
-      user: {
-        id: user.id,
-        nama: user.nama,
-        username: user.username,
-      },
-      token: token,
+      user: buildLoginUser(user),
+      token,
     });
-  });
+  } catch (err) {
+    return res.status(500).json({
+      message: "Database error",
+      error: err.message,
+    });
+  }
 };
+
+exports.buildLoginUser = buildLoginUser;

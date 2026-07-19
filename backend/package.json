@@ -10,7 +10,8 @@
     "dev": "nodemon server.js",
     "db:migrate": "node scripts/migrate.js",
     "db:status": "node scripts/migrationStatus.js",
-    "db:rollback": "node scripts/rollbackMigration.js"
+    "db:rollback": "node scripts/rollbackMigration.js",
+    "db:seed": "node scripts/seed.js"
   },
   "keywords": [],
   "author": "",
@@ -18,6 +19,7 @@
   "type": "commonjs",
   "dependencies": {
     "axios": "^1.16.1",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
     "express": "^5.2.1",
