@@ -1,4 +1,8 @@
 const db = require("../config/database");
+const {
+  StockTransactionError,
+  createStockTransaction,
+} = require("../services/stockTransactionService");
 
 exports.getTransaksi = (req, res) => {
   const query = `
@@ -18,83 +22,24 @@ exports.getTransaksi = (req, res) => {
   });
 };
 
-exports.tambahTransaksi = (req, res) => {
-  const { produk_id, jenis_transaksi, jumlah, harga, tanggal } = req.body;
+exports.tambahTransaksi = async (req, res) => {
+  try {
+    const result = await createStockTransaction(db, req.body);
+    return res.json(result);
+  } catch (error) {
+    const statusCode = error instanceof StockTransactionError
+      ? error.statusCode
+      : 500;
 
-  // 1. Pastikan input dari frontend tidak kosong
-  if (!produk_id || !jenis_transaksi || !jumlah || !harga) {
-    return res.status(400).json({
-      message: "Data tidak lengkap (produk_id, jenis_transaksi, jumlah, harga diperlukan)",
+    if (statusCode >= 500) {
+      console.error("Error creating transaksi:", error);
+    }
+
+    return res.status(statusCode).json({
+      message: error.message || "Database error",
+      ...(error.details ? { details: error.details } : {}),
     });
   }
-
-  const total = jumlah * harga;
-  const tanggalTransaksi = tanggal || new Date().toISOString().split('T')[0];
-
-  // 2. Ambil data stok produk saat ini dari database
-  db.query("SELECT stok FROM produk WHERE id=$1", [produk_id], (err, result) => {
-    if (err) {
-      console.error("Error selecting produk:", err);
-      return res.status(500).json({ message: "Database error", error: err.message });
-    }
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({
-        message: "Produk tidak ditemukan",
-      });
-    }
-
-    let stok = result.rows[0].stok;
-
-    // 3. Update stok berdasarkan jenis transaksi
-    if (jenis_transaksi === "masuk") {
-      // Jika barang masuk, stok bertambah
-      stok = stok + jumlah;
-    } else if (jenis_transaksi === "keluar") {
-      // VALIDASI PENTING: Mencegah stok bernilai negatif (minus)
-      if (stok < jumlah) {
-        return res.status(400).json({
-          message: "Stok tidak mencukupi",
-        });
-      }
-
-      // Jika stok cukup, kurangi stok barang
-      stok = stok - jumlah;
-    } else {
-      return res.status(400).json({
-        message: "Jenis transaksi harus 'masuk' atau 'keluar'",
-      });
-    }
-
-    // 4. Masukkan data transaksi baru ke database
-    const queryTransaksi = `
-      INSERT INTO transaksi
-      (produk_id,jenis_transaksi,jumlah,harga,total,tanggal)
-      VALUES ($1,$2,$3,$4,$5,$6)
-      RETURNING id
-      `;
-
-    db.query(queryTransaksi, [produk_id, jenis_transaksi, jumlah, harga, total, tanggalTransaksi], (err, insertResult) => {
-      if (err) {
-        console.error("Error inserting transaksi:", err);
-        return res.status(500).json({ message: "Database error", error: err.message });
-      }
-
-      // 5. Update stok terbaru ke tabel produk
-      db.query("UPDATE produk SET stok=$1 WHERE id=$2", [stok, produk_id], (err) => {
-        if (err) {
-          console.error("Error updating stok:", err);
-          return res.status(500).json({ message: "Database error", error: err.message });
-        }
-
-        res.json({
-          message: "Transaksi berhasil",
-          stok_sekarang: stok,
-          transaksi_id: insertResult.rows[0].id,
-        });
-      });
-    });
-  });
 };
 
 exports.updateTransaksi = (req, res) => {
