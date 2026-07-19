@@ -1,5 +1,10 @@
 # Inventory History API
 
+Histori pada endpoint ini adalah posisi persediaan akhir bulan dari
+`inventory_snapshot_monthly`. Nilai ini bukan penjualan dan bukan permintaan.
+Kolom `Jml` dari Excel bulanan diperlakukan sebagai `stok_akhir`, bukan
+barang keluar.
+
 ## GET /api/inventory-history/:produk_id
 
 Mengambil histori persediaan bulanan dari tabel `inventory_snapshot_monthly`.
@@ -36,6 +41,34 @@ GET /api/inventory-history/12?start_period=2024-01&end_period=2025-12
 ```
 
 `values` memakai `null` untuk periode hilang atau snapshot dengan `status_data = 'missing'`.
+
+## GET /api/inventory-history/:produk_id/quality
+
+Mengambil kualitas histori persediaan bulanan satu produk.
+
+Contoh:
+
+```http
+GET /api/inventory-history/12/quality
+```
+
+Response:
+
+```json
+{
+  "produk_id": 12,
+  "observation_count": 24,
+  "missing_months": [],
+  "zero_ratio": 0,
+  "eligible": true,
+  "status": "eligible",
+  "messages": ["Data layak untuk analisis awal"]
+}
+```
+
+## GET /api/inventory-history/quality/summary
+
+Mengambil ringkasan jumlah produk berdasarkan status kelayakan data.
 
 ### Error
 

@@ -1,5 +1,9 @@
 # Inventory Forecast API
 
+Forecast inventory memprediksi posisi persediaan akhir bulan berikutnya.
+Hasilnya bukan prediksi penjualan, bukan prediksi permintaan, dan bukan
+rekomendasi jumlah pembelian.
+
 ## POST /api/forecast/inventory/:produk_id
 
 Membuat forecast persediaan bulanan dari `inventory_snapshot_monthly`.
@@ -22,6 +26,40 @@ Ketentuan:
 - backend mengirim `periods` dan `values` langsung ke worker Flask `POST /predict`;
 - URL worker dibaca dari `FORECAST_WORKER_URL` atau `WORKER_URL`;
 - timeout worker dibaca dari `FORECAST_WORKER_TIMEOUT_MS`.
+
+Contoh response:
+
+```json
+{
+  "product_id": 1,
+  "target": "ending_inventory",
+  "frequency": "monthly",
+  "model_used": "SES",
+  "forecast_periods": ["2026-01"],
+  "forecast_values": [85],
+  "evaluation": {
+    "mae": 10.2,
+    "rmse": 12.4,
+    "wape": 15.6,
+    "test_points": 6
+  },
+  "candidate_models": [
+    {
+      "model": "Naive",
+      "status": "success",
+      "mae": 12
+    }
+  ],
+  "backtest": [
+    {
+      "period": "2025-07",
+      "actual": 100,
+      "predicted": 95
+    }
+  ],
+  "warning": null
+}
+```
 
 ## GET /api/forecast/inventory/:produk_id/latest
 
@@ -48,3 +86,10 @@ Contoh response:
   }
 ]
 ```
+
+## Model dan Evaluasi
+
+Worker membandingkan Naive, Single Exponential Smoothing, Damped Holt, dan
+ARIMA sederhana dengan order terbatas. Evaluasi memakai rolling-origin
+validation dengan MAE, RMSE, dan WAPE. Sistem tidak memakai `100 - MAPE`
+sebagai akurasi.
