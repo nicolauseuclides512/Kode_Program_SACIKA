@@ -1,3 +1,4 @@
+import json
 import unittest
 
 from app import app
@@ -44,6 +45,7 @@ class PredictEndpointTest(unittest.TestCase):
         self.assertEqual(len(body["forecast_values"]), 1)
         self.assertEqual(body["evaluation"]["test_points"], 6)
         self.assertEqual(len(body["candidate_models"]), 4)
+        json.dumps(body["candidate_models"])
         self.assertEqual(len(body["backtest"]), 6)
         self.assertIn("actual", body["backtest"][0])
         self.assertIn("predicted", body["backtest"][0])
@@ -79,6 +81,17 @@ class PredictEndpointTest(unittest.TestCase):
         body = response.get_json()
         self.assertIn("values[3] tidak boleh negatif", body["errors"])
 
+    def test_predict_rejects_less_than_eighteen_valid_observations(self):
+        payload = valid_payload()
+        payload["periods"] = payload["periods"][:17]
+        payload["values"] = payload["values"][:17]
+
+        response = self.client.post("/predict", json=payload)
+
+        self.assertEqual(response.status_code, 400)
+        body = response.get_json()
+        self.assertIn("observasi valid minimal 18, saat ini 17", body["errors"])
+
     def test_predict_rejects_non_consecutive_periods(self):
         payload = valid_payload()
         payload["periods"][5] = "2025-12"
@@ -99,6 +112,7 @@ class PredictEndpointTest(unittest.TestCase):
         body = response.get_json()
         self.assertIsNotNone(body["warning"])
         self.assertIn("Terdapat bulan hilang pada histori", body["warning"])
+        json.dumps(body["candidate_models"])
 
     def test_predict_rejects_horizon_above_temporary_limit(self):
         payload = valid_payload()

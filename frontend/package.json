@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "test": "node --test src/pages/prediksi/Prediksi.static.test.js src/pages/Dashboard.static.test.js",
     "lint": "eslint .",
     "preview": "vite preview",
     "start": "serve -s build -l 3000",

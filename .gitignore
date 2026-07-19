@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+.npm-cache/
 
 # Node / Vite build output
 dist/
@@ -29,6 +30,8 @@ env/
 ENV/
 
 # Python tooling cache
+.pip-cache/
+.python-deps/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/

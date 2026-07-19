@@ -154,7 +154,19 @@ def _evaluate_arima(values):
             "metadata": {"orders": order_summaries},
         }
 
-    best_arima["summary"]["metadata"]["orders"] = order_summaries
+    best_arima["summary"]["metadata"]["orders"] = [
+        {
+            "model": summary["model"],
+            "status": summary["status"],
+            "mae": summary["mae"],
+            "rmse": summary["rmse"],
+            "wape": summary["wape"],
+            "test_points": summary["test_points"],
+            "error": summary["error"],
+            "metadata": dict(summary.get("metadata", {})),
+        }
+        for summary in order_summaries
+    ]
     return best_arima
 
 

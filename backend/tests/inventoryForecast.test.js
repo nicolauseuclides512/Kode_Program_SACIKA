@@ -254,6 +254,29 @@ test("runInventoryForecast preserves worker model-selection failure as 422", asy
   );
 });
 
+test("runInventoryForecast maps worker server error to HTTP 502", async () => {
+  const db = createFakeDb();
+  const httpClient = {
+    async post() {
+      const error = new Error("worker returned 500");
+      error.response = {
+        status: 500,
+        data: { error: "internal worker error" },
+      };
+      throw error;
+    },
+  };
+
+  await assert.rejects(
+    () => runInventoryForecast(db, 1, { httpClient }),
+    (error) => {
+      assert.equal(error.statusCode, 502);
+      assert.match(error.message, /Worker forecasting gagal memproses request/);
+      return true;
+    },
+  );
+});
+
 test("runInventoryForecast rejects invalid worker response as 502", async () => {
   const db = createFakeDb();
   const httpClient = createMockHttpClient({
