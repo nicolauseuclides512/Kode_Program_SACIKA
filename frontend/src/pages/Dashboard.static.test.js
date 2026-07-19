@@ -15,4 +15,5 @@ test("Dashboard does not present local ARIMA restock or purchase quantity recomm
   assert.doesNotMatch(source, /restockArima|Restock ARIMA|ARIMA/i);
   assert.doesNotMatch(source, /jumlah pembelian|jumlah.*dibeli|harus dibeli|disarankan/i);
   assert.doesNotMatch(source, /id_produk/);
+  assert.doesNotMatch(source, /W1|W2|W3|W4/);
 });

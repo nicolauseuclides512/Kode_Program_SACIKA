@@ -136,7 +136,7 @@ const Dashboard = () => {
 
   
   const lineChartData = {
-    labels: ["Minggu 1", "Minggu 2", "Minggu 3", "Minggu 4"],
+    labels: ["Pekan 1", "Pekan 2", "Pekan 3", "Pekan 4"],
     datasets: [
       {
         label: "Supply (Masuk)",
@@ -348,7 +348,7 @@ const Dashboard = () => {
         <Card className="lg:col-span-4 rounded-xl border border-zinc-200 shadow-sm">
           <CardHeader>
             <CardTitle className="text-base font-semibold">Arus Stok Mingguan</CardTitle>
-            <CardDescription className="text-xs">Statistik barang masuk dan keluar koperasi per periode W1 - W4</CardDescription>
+            <CardDescription className="text-xs">Statistik barang masuk dan keluar koperasi per pekan dalam bulan terpilih.</CardDescription>
           </CardHeader>
           <CardContent className="pl-2">
             <div className="relative w-full">

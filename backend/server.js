@@ -7,7 +7,6 @@ const authRoutes = require("./routes/authRoutes");
 const kategoriRoutes = require("./routes/kategoriRoutes");
 const produkRoutes = require("./routes/produkRoutes");
 const transaksiRoutes = require("./routes/transaksiRoutes");
-const prediksiRoutes = require("./routes/prediksiRoutes");
 const datasetRoutes = require("./routes/datasetRoutes");
 const laporanRoutes = require("./routes/laporanRoutes");
 const inventoryHistoryRoutes = require("./routes/inventoryHistoryRoutes");
@@ -25,14 +24,13 @@ app.use("/api", authRoutes);
 app.use("/api/kategori", kategoriRoutes);
 app.use("/api/produk", produkRoutes);
 app.use("/api/transaksi", transaksiRoutes);
-app.use("/api/prediksi", prediksiRoutes);
 app.use("/api/dataset", datasetRoutes);
 app.use("/api/laporan", laporanRoutes);
 app.use("/api/inventory-history", inventoryHistoryRoutes);
 app.use("/api/forecast", forecastRoutes);
 
 app.get("/", (req, res) => {
-  res.send("API Sistem Koperasi ARIMA");
+  res.send("API Sistem Koperasi SACIKA");
 });
 
 const PORT = process.env.PORT || 3001;
