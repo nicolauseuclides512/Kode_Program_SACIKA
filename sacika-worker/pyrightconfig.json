@@ -1,0 +1,15 @@
+{
+  "include": [
+    ".",
+    "forecasting",
+    "tests"
+  ],
+  "exclude": [
+    ".python-deps",
+    ".pip-cache",
+    "__pycache__"
+  ],
+  "extraPaths": [
+    ".python-deps"
+  ]
+}
