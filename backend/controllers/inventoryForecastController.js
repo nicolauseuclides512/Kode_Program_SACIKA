@@ -4,6 +4,10 @@ const {
   getLatestInventoryForecast,
   runInventoryForecast,
 } = require("../services/inventoryForecastService");
+const {
+  SalesForecastReadinessError,
+  getMonthlySalesForecastReadiness,
+} = require("../services/salesForecastReadinessService");
 
 function getDefaultDatabase() {
   return require("../config/database");
@@ -73,6 +77,21 @@ function createInventoryForecastController(database = getDefaultDatabase(), opti
             ? error
             : new InventoryForecastError(500, "Gagal mengambil forecast persediaan terbaru", error.message),
           "Error fetching latest inventory forecast:",
+        );
+      }
+    },
+
+    async getSalesForecastReadiness(req, res) {
+      try {
+        const readiness = await getMonthlySalesForecastReadiness(database, req.params.produk_id);
+        return res.json(readiness);
+      } catch (error) {
+        return sendError(
+          res,
+          error instanceof SalesForecastReadinessError
+            ? error
+            : new SalesForecastReadinessError(500, "Gagal mengambil status kesiapan prediksi penjualan", error.message),
+          "Error fetching sales forecast readiness:",
         );
       }
     },

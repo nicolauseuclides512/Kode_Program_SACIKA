@@ -18,5 +18,6 @@ export const ENDPOINTS = {
   inventoryHistory: (id) => `/inventory-history/${id}`,
   inventoryForecast: (id) => `/forecast/inventory/${id}`,
   latestInventoryForecast: (id) => `/forecast/inventory/${id}/latest`,
+  salesForecastReadiness: (id) => `/forecast/sales/${id}/readiness`,
   inventoryRisk: "/forecast/inventory-risk",
 };

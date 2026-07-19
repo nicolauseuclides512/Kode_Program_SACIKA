@@ -379,6 +379,39 @@ Mengambil ringkasan risiko forecast terbaru.
 ]
 ```
 
+### GET /api/forecast/sales/:produk_id/readiness
+
+Mengambil status kesiapan data untuk prediksi penjualan bulanan dari tabel
+`penjualan_bulanan`. Endpoint ini tidak menjalankan forecasting dan tidak
+diaktifkan di halaman utama.
+
+Target ini terpisah dari persediaan:
+
+- `ending_inventory`: histori posisi persediaan akhir bulan.
+- `monthly_sales`: transaksi keluar aktual yang sudah diagregasi bulanan.
+
+Aturan status:
+
+- kurang dari 6 bulan: `insufficient_data`;
+- 6 sampai 11 bulan: `experimental`;
+- minimal 12 bulan: `eligible_basic`;
+- minimal 24 bulan: `eligible_full`.
+
+Contoh:
+
+```http
+GET /api/forecast/sales/1/readiness
+```
+
+```json
+{
+  "target": "monthly_sales",
+  "observation_count": 8,
+  "status": "experimental",
+  "message": "Prediksi penjualan belum diaktifkan karena histori belum mencukupi."
+}
+```
+
 ### POST /predict Worker
 
 Worker menerima deret waktu langsung dari request body. Worker tidak mengambil dataset kembali dari backend.
@@ -402,4 +435,3 @@ Worker menerima deret waktu langsung dari request body. Worker tidak mengambil d
 - Prediksi penjualan baru layak dibuat dari transaksi keluar aktual yang benar-benar tercatat di sistem.
 - Produk yang belum dapat dipetakan dari Excel harus diselesaikan lewat alias/manual review.
 - Warning kualitas data tidak mengubah nilai prediksi.
-

@@ -8,6 +8,7 @@ const router = express.Router();
 const inventoryForecastController = createInventoryForecastController();
 
 router.get("/inventory-risk", inventoryForecastController.getInventoryRiskSummary);
+router.get("/sales/:produk_id/readiness", inventoryForecastController.getSalesForecastReadiness);
 router.post("/inventory/:produk_id", inventoryForecastController.createInventoryForecast);
 router.get("/inventory/:produk_id/latest", inventoryForecastController.getLatestInventoryForecast);
 

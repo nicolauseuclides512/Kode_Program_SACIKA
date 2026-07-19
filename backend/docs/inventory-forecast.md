@@ -87,6 +87,31 @@ Contoh response:
 ]
 ```
 
+## GET /api/forecast/sales/:produk_id/readiness
+
+Mengambil status kesiapan data untuk target `monthly_sales`. Sumber data hanya
+`penjualan_bulanan`, yaitu agregasi transaksi keluar aktual. Endpoint ini tidak
+menjalankan model forecasting dan tidak mencampur target dengan
+`ending_inventory`.
+
+Aturan status:
+
+- `< 6` bulan: `insufficient_data`;
+- `6-11` bulan: `experimental`;
+- `12-23` bulan: `eligible_basic`;
+- `>= 24` bulan: `eligible_full`.
+
+Contoh response:
+
+```json
+{
+  "target": "monthly_sales",
+  "observation_count": 8,
+  "status": "experimental",
+  "message": "Prediksi penjualan belum diaktifkan karena histori belum mencukupi."
+}
+```
+
 ## Model dan Evaluasi
 
 Worker membandingkan Naive, Single Exponential Smoothing, Damped Holt, dan

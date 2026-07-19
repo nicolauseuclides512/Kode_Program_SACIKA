@@ -4,8 +4,9 @@ const {
   getInventoryHistory,
   getProductQuality,
 } = require("./inventoryHistoryQualityService");
+const { FORECAST_TARGETS } = require("./forecastTargets");
 
-const TARGET = "ending_inventory";
+const TARGET = FORECAST_TARGETS.ENDING_INVENTORY;
 const FREQUENCY = "monthly";
 const MIN_OBSERVATION_COUNT = 18;
 const DEFAULT_WORKER_URL = "http://localhost:5000";
