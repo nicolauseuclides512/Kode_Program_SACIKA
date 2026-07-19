@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import api from "../api/axios";
+import { ENDPOINTS } from "../api/endpoints";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
@@ -7,10 +8,8 @@ import {
   Package,
   ArrowDown,
   ArrowUp,
-  TrendingUp,
   AlertCircle,
   CheckCircle2,
-  Cpu,
   Calendar,
   ArrowUpRight,
   TrendingDown,
@@ -36,6 +35,7 @@ ChartJS.register(LineElement, ArcElement, CategoryScale, LinearScale, PointEleme
 const Dashboard = () => {
   const [produk, setProduk] = useState([]);
   const [transaksi, setTransaksi] = useState([]);
+  const [inventoryRisk, setInventoryRisk] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedMonth, setSelectedMonth] = useState(new Date());
 
@@ -46,10 +46,20 @@ const Dashboard = () => {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const resProduk = await api.get("/produk");
-      const resTransaksi = await api.get("/transaksi");
+      const [resProduk, resTransaksi] = await Promise.all([
+        api.get(ENDPOINTS.produk),
+        api.get("/transaksi"),
+      ]);
       setProduk(resProduk.data);
       setTransaksi(resTransaksi.data);
+
+      try {
+        const resInventoryRisk = await api.get(ENDPOINTS.inventoryRisk);
+        setInventoryRisk(Array.isArray(resInventoryRisk.data) ? resInventoryRisk.data : []);
+      } catch (riskError) {
+        console.error(riskError);
+        setInventoryRisk([]);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -57,15 +67,14 @@ const Dashboard = () => {
     }
   };
 
-  const formatBulan = (date) => {
-    return date.toLocaleDateString("id-ID", {
-      month: "long",
-      year: "numeric",
-    });
-  };
-
   const formatMonthForFilter = (date) => {
     return date.toISOString().slice(0, 7);
+  };
+
+  const formatUnit = (value) => {
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) return "N/A";
+    return numericValue.toLocaleString("id-ID");
   };
 
   const transaksiBulan = transaksi.filter((t) => {
@@ -93,14 +102,7 @@ const Dashboard = () => {
 
   const totalStok = produk.reduce((sum, item) => sum + Number(item.stok), 0);
   const stokMinimum = produk.filter((p) => Number(p.stok) <= Number(p.stok_minimum));
-
-  
-  const restockArima = produk.filter((p) => {
-    const avgWeeklySales = transaksi
-      .filter((t) => t.id_produk === p.id && t.jenis_transaksi === "keluar")
-      .reduce((sum, t) => sum + Number(t.jumlah), 0) / 4;
-    return Number(p.stok) < (avgWeeklySales * 1.5);
-  });
+  const highInventoryRisks = inventoryRisk.filter((item) => item.risk === "high");
 
   const trendMasuk = totalMasukLalu > 0 ? (((totalMasuk - totalMasukLalu) / totalMasukLalu) * 100).toFixed(1) : 0;
   const trendKeluar = totalKeluarLalu > 0 ? (((totalKeluar - totalKeluarLalu) / totalKeluarLalu) * 100).toFixed(1) : 0;
@@ -179,7 +181,7 @@ const Dashboard = () => {
         <div>
           <h2 className="text-3xl font-bold tracking-tight text-zinc-900">Dashboard</h2>
           <p className="text-sm text-zinc-500 mt-1">
-            Pantau arus stok koperasi dan rekomendasi restok persediaan barang.
+            Pantau arus stok koperasi dan risiko persediaan berbasis hasil prediksi.
           </p>
         </div>
 
@@ -244,18 +246,44 @@ const Dashboard = () => {
       </div>
 
       {}
-      {restockArima.length > 0 && (
-        <div className="flex items-start gap-4 p-4 rounded-xl border bg-zinc-50/50">
-          <AlertCircle className="h-5 w-5 text-zinc-600 mt-0.5 shrink-0" />
-          <div>
-            <h4 className="text-sm font-semibold text-zinc-900">Pemberitahuan Restock ARIMA</h4>
+      <div className="flex items-start gap-4 p-4 rounded-xl border bg-zinc-50/50">
+        <AlertCircle className="h-5 w-5 text-zinc-600 mt-0.5 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <h4 className="text-sm font-semibold text-zinc-900">Peringatan Prediksi Persediaan Bulan Berikutnya</h4>
+
+          {inventoryRisk.length === 0 ? (
             <p className="text-xs text-zinc-500 leading-relaxed mt-1">
-              Model prediksi ARIMA mengidentifikasi <strong>{restockArima.length} produk</strong> memiliki stok di bawah estimasi permintaan mingguan berjalan.
-              Disarankan melakukan restok suplai melalui menu <strong className="text-zinc-800">Transaksi Masuk</strong>.
+              Belum tersedia hasil prediksi persediaan.
             </p>
-          </div>
+          ) : highInventoryRisks.length === 0 ? (
+            <p className="text-xs text-zinc-500 leading-relaxed mt-1">
+              Seluruh hasil prediksi persediaan terbaru masih berada di atas batas minimum.
+            </p>
+          ) : (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-zinc-500 leading-relaxed">
+                Terdapat <strong>{highInventoryRisks.length} produk</strong> dengan prediksi persediaan bulan berikutnya berada di bawah batas minimum.
+              </p>
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                {highInventoryRisks.slice(0, 6).map((item) => (
+                  <div
+                    key={`${item.produk_id}-${item.forecast_period}-${item.model_used}`}
+                    className="rounded-lg border border-zinc-200 bg-white px-3 py-2"
+                  >
+                    <p className="text-xs font-semibold text-zinc-900 truncate">{item.nama_produk}</p>
+                    <p className="text-[10px] text-zinc-400 mt-1">
+                      {item.forecast_period} | {item.model_used}
+                    </p>
+                    <p className="text-[11px] text-zinc-600 mt-1">
+                      Prediksi: <strong>{formatUnit(item.forecast_value)} unit</strong> / Minimum: <strong>{formatUnit(item.stok_minimum)} unit</strong>
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
 
       {}
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">

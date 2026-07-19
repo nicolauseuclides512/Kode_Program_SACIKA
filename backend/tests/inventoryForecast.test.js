@@ -2,6 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  buildInventoryRiskRows,
+  getInventoryRiskSummary,
   getLatestInventoryForecast,
   runInventoryForecast,
 } = require("../services/inventoryForecastService");
@@ -99,6 +101,7 @@ function createFakeDb(options = {}) {
     }];
   const historyRows = options.historyRows || createMonthlyRows();
   const latestRows = options.latestRows || [];
+  const riskRows = options.riskRows || [];
   const executedQueries = [];
   const transactionQueries = [];
   let forecastId = 0;
@@ -108,6 +111,10 @@ function createFakeDb(options = {}) {
     transactionQueries,
     async query(sql, params = []) {
       executedQueries.push({ sql, params });
+
+      if (sql.includes("latest_run")) {
+        return { rows: riskRows };
+      }
 
       if (sql.includes("FROM produk")) {
         return { rows: productRows };
@@ -327,4 +334,108 @@ test("inventory forecast controller maps not eligible quality to HTTP 422", asyn
 
   assert.equal(res.statusCode, 422);
   assert.equal(res.body.details.observation_count, 17);
+});
+
+test("buildInventoryRiskRows uses produk_id and marks high risk from forecast_result rows", () => {
+  const rows = buildInventoryRiskRows([
+    {
+      produk_id: 1,
+      nama_produk: "Aqua Botol 600 ml",
+      forecast_period: "2026-01-01",
+      forecast_value: "45.00",
+      stok_minimum: "60.00",
+      model_used: "SES",
+    },
+    {
+      produk_id: 2,
+      nama_produk: "Coffemix 20 g",
+      forecast_period: "2026-01-01",
+      forecast_value: "80.00",
+      stok_minimum: "20.00",
+      model_used: "Naive",
+    },
+  ]);
+
+  assert.deepEqual(rows, [
+    {
+      produk_id: 1,
+      nama_produk: "Aqua Botol 600 ml",
+      forecast_period: "2026-01",
+      forecast_value: 45,
+      stok_minimum: 60,
+      risk: "high",
+      model_used: "SES",
+    },
+    {
+      produk_id: 2,
+      nama_produk: "Coffemix 20 g",
+      forecast_period: "2026-01",
+      forecast_value: 80,
+      stok_minimum: 20,
+      risk: "low",
+      model_used: "Naive",
+    },
+  ]);
+  assert.equal(Object.prototype.hasOwnProperty.call(rows[0], "id_produk"), false);
+});
+
+test("getInventoryRiskSummary reads latest valid forecast_result rows", async () => {
+  const db = createFakeDb({
+    riskRows: [
+      {
+        produk_id: 1,
+        nama_produk: "Aqua Botol 600 ml",
+        forecast_period: "2026-01-01",
+        forecast_value: "45.00",
+        stok_minimum: "60.00",
+        model_used: "SES",
+      },
+    ],
+  });
+
+  const result = await getInventoryRiskSummary(db);
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].produk_id, 1);
+  assert.equal(result[0].risk, "high");
+  assert.equal(
+    db.executedQueries.some(({ sql }) => sql.includes("FROM forecast_result")),
+    true,
+  );
+  assert.equal(
+    db.executedQueries.some(({ sql }) => sql.includes("dataset_mingguan")),
+    false,
+  );
+});
+
+test("inventory forecast controller returns inventory risk summary", async () => {
+  const db = createFakeDb({
+    riskRows: [
+      {
+        produk_id: 1,
+        nama_produk: "Aqua Botol 600 ml",
+        forecast_period: "2026-01-01",
+        forecast_value: "45.00",
+        stok_minimum: "60.00",
+        model_used: "SES",
+      },
+    ],
+  });
+  const controller = createInventoryForecastController(db);
+  const res = createResponse();
+
+  await controller.getInventoryRiskSummary({}, res);
+
+  assert.equal(res.statusCode, 200);
+  assert.deepEqual(res.body, [
+    {
+      produk_id: 1,
+      nama_produk: "Aqua Botol 600 ml",
+      forecast_period: "2026-01",
+      forecast_value: 45,
+      stok_minimum: 60,
+      risk: "high",
+      model_used: "SES",
+    },
+  ]);
 });

@@ -380,6 +380,80 @@ function buildLatestForecastResponse(product, rows) {
   };
 }
 
+function getRiskLevel(forecastValue, stokMinimum) {
+  const forecast = toNumberOrNull(forecastValue);
+  const minimum = toNumberOrNull(stokMinimum);
+
+  if (forecast === null || minimum === null) return "unknown";
+  return forecast <= minimum ? "high" : "low";
+}
+
+function buildInventoryRiskRows(rows = []) {
+  return rows.map((row) => ({
+    produk_id: Number(row.produk_id),
+    nama_produk: row.nama_produk,
+    forecast_period: formatMonth(row.forecast_period),
+    forecast_value: toNumberOrNull(row.forecast_value),
+    stok_minimum: toNumberOrNull(row.stok_minimum),
+    risk: getRiskLevel(row.forecast_value, row.stok_minimum),
+    model_used: row.model_used,
+  }));
+}
+
+async function getInventoryRiskSummary(db) {
+  const result = await db.query(
+    `
+      WITH latest_run AS (
+        SELECT DISTINCT ON (fr.produk_id)
+          fr.produk_id,
+          fr.target,
+          fr.data_cutoff,
+          fr.model_used,
+          fr.created_at
+        FROM forecast_result fr
+        WHERE fr.target=$1
+          AND fr.forecast_value IS NOT NULL
+          AND fr.forecast_value >= 0
+          AND BTRIM(fr.model_used) <> ''
+        ORDER BY fr.produk_id, fr.created_at DESC, fr.data_cutoff DESC, fr.id DESC
+      ),
+      next_forecast AS (
+        SELECT DISTINCT ON (fr.produk_id)
+          fr.produk_id,
+          p.nama_produk,
+          fr.forecast_period,
+          fr.forecast_value,
+          p.stok_minimum,
+          fr.model_used
+        FROM forecast_result fr
+        JOIN latest_run lr
+          ON lr.produk_id = fr.produk_id
+         AND lr.target = fr.target
+         AND lr.data_cutoff = fr.data_cutoff
+         AND lr.model_used = fr.model_used
+         AND lr.created_at = fr.created_at
+        JOIN produk p ON p.id = fr.produk_id
+        WHERE fr.forecast_period > fr.data_cutoff
+          AND fr.forecast_value IS NOT NULL
+          AND fr.forecast_value >= 0
+        ORDER BY fr.produk_id, fr.forecast_period ASC, fr.id ASC
+      )
+      SELECT *
+      FROM next_forecast
+      ORDER BY
+        CASE
+          WHEN forecast_value <= stok_minimum THEN 0
+          ELSE 1
+        END,
+        forecast_period ASC,
+        nama_produk ASC
+    `,
+    [TARGET],
+  );
+
+  return buildInventoryRiskRows(result.rows);
+}
+
 async function getLatestInventoryForecast(db, produkIdInput) {
   const produkId = parseProdukId(produkIdInput);
 
@@ -431,10 +505,13 @@ module.exports = {
   InventoryForecastError,
   MIN_OBSERVATION_COUNT,
   TARGET,
+  buildInventoryRiskRows,
   buildLatestForecastResponse,
   buildWorkerPayload,
   callForecastWorker,
+  getInventoryRiskSummary,
   getLatestInventoryForecast,
+  getRiskLevel,
   parseHorizon,
   runInventoryForecast,
   validateWorkerResponse,

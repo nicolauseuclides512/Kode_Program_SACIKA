@@ -26,3 +26,25 @@ Ketentuan:
 ## GET /api/forecast/inventory/:produk_id/latest
 
 Mengambil hasil forecast inventory terbaru dari `forecast_result`.
+
+## GET /api/forecast/inventory-risk
+
+Mengambil ringkasan risiko prediksi persediaan bulan berikutnya dari hasil
+`forecast_result` terbaru yang valid. Endpoint ini tidak menghitung rata-rata
+transaksi dan tidak membaca `dataset_mingguan`.
+
+Contoh response:
+
+```json
+[
+  {
+    "produk_id": 1,
+    "nama_produk": "Aqua Botol 600 ml",
+    "forecast_period": "2026-01",
+    "forecast_value": 45,
+    "stok_minimum": 60,
+    "risk": "high",
+    "model_used": "SES"
+  }
+]
+```

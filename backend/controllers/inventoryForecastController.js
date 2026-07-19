@@ -1,5 +1,6 @@
 const {
   InventoryForecastError,
+  getInventoryRiskSummary,
   getLatestInventoryForecast,
   runInventoryForecast,
 } = require("../services/inventoryForecastService");
@@ -23,6 +24,21 @@ function sendError(res, error, fallbackMessage) {
 
 function createInventoryForecastController(database = getDefaultDatabase(), options = {}) {
   return {
+    async getInventoryRiskSummary(req, res) {
+      try {
+        const riskSummary = await getInventoryRiskSummary(database);
+        return res.json(riskSummary);
+      } catch (error) {
+        return sendError(
+          res,
+          error instanceof InventoryForecastError
+            ? error
+            : new InventoryForecastError(500, "Gagal mengambil ringkasan risiko prediksi", error.message),
+          "Error fetching inventory forecast risk:",
+        );
+      }
+    },
+
     async createInventoryForecast(req, res) {
       try {
         const forecast = await runInventoryForecast(
