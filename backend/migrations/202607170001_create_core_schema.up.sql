@@ -1,25 +1,26 @@
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS pengguna (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   nama TEXT NOT NULL,
   username TEXT NOT NULL,
-  password TEXT NOT NULL,
+  password_hash TEXT NOT NULL,
+  is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT chk_pengguna_nama_not_empty
     CHECK (BTRIM(nama) <> ''),
   CONSTRAINT chk_pengguna_username_not_empty
     CHECK (BTRIM(username) <> ''),
-  CONSTRAINT chk_pengguna_password_not_empty
-    CHECK (BTRIM(password) <> '')
+  CONSTRAINT chk_pengguna_password_hash_not_empty
+    CHECK (BTRIM(password_hash) <> '')
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_pengguna_username_normalized
   ON pengguna (LOWER(BTRIM(username)));
 
 CREATE TABLE IF NOT EXISTS kategori (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   nama_kategori TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -31,10 +32,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_kategori_nama_normalized
   ON kategori (LOWER(BTRIM(nama_kategori)));
 
 CREATE TABLE IF NOT EXISTS produk (
-  id SERIAL PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   kode_produk TEXT,
   nama_produk TEXT NOT NULL,
-  kategori_id INTEGER NOT NULL REFERENCES kategori(id) ON DELETE RESTRICT,
+  kategori_id BIGINT NOT NULL REFERENCES kategori(id) ON DELETE RESTRICT,
   harga NUMERIC(14, 2) NOT NULL DEFAULT 0,
   stok NUMERIC(14, 2) NOT NULL DEFAULT 0,
   stok_minimum NUMERIC(14, 2) NOT NULL DEFAULT 5,
@@ -63,8 +64,8 @@ CREATE INDEX IF NOT EXISTS idx_produk_kategori_id
   ON produk (kategori_id);
 
 CREATE TABLE IF NOT EXISTS transaksi (
-  id SERIAL PRIMARY KEY,
-  produk_id INTEGER NOT NULL REFERENCES produk(id) ON DELETE RESTRICT,
+  id BIGSERIAL PRIMARY KEY,
+  produk_id BIGINT NOT NULL REFERENCES produk(id) ON DELETE RESTRICT,
   jenis_transaksi TEXT NOT NULL,
   jumlah NUMERIC(14, 2) NOT NULL,
   harga NUMERIC(14, 2) NOT NULL,
@@ -76,8 +77,8 @@ CREATE TABLE IF NOT EXISTS transaksi (
     CHECK (jenis_transaksi IN ('masuk', 'keluar')),
   CONSTRAINT chk_transaksi_jumlah_positive
     CHECK (jumlah > 0),
-  CONSTRAINT chk_transaksi_harga_positive
-    CHECK (harga > 0),
+  CONSTRAINT chk_transaksi_harga_nonnegative
+    CHECK (harga >= 0),
   CONSTRAINT chk_transaksi_total_nonnegative
     CHECK (total >= 0)
 );
@@ -85,15 +86,18 @@ CREATE TABLE IF NOT EXISTS transaksi (
 CREATE INDEX IF NOT EXISTS idx_transaksi_produk_id
   ON transaksi (produk_id);
 
-CREATE INDEX IF NOT EXISTS idx_transaksi_tanggal_desc
+CREATE INDEX IF NOT EXISTS idx_transaksi_tanggal
   ON transaksi (tanggal DESC, id DESC);
 
 CREATE INDEX IF NOT EXISTS idx_transaksi_jenis_tanggal
   ON transaksi (jenis_transaksi, tanggal DESC);
 
+CREATE INDEX IF NOT EXISTS idx_transaksi_produk_tanggal
+  ON transaksi (produk_id, tanggal DESC);
+
 CREATE TABLE IF NOT EXISTS dataset_mingguan (
-  id SERIAL PRIMARY KEY,
-  produk_id INTEGER NOT NULL REFERENCES produk(id) ON DELETE CASCADE,
+  id BIGSERIAL PRIMARY KEY,
+  produk_id BIGINT NOT NULL REFERENCES produk(id) ON DELETE RESTRICT,
   tahun INTEGER NOT NULL,
   bulan INTEGER NOT NULL,
   minggu_ke INTEGER NOT NULL,
@@ -103,8 +107,6 @@ CREATE TABLE IF NOT EXISTS dataset_mingguan (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CONSTRAINT uq_dataset_mingguan_produk_period_label
     UNIQUE (produk_id, period_label),
-  CONSTRAINT uq_dataset_mingguan_produk_tahun_bulan_minggu
-    UNIQUE (produk_id, tahun, bulan, minggu_ke),
   CONSTRAINT chk_dataset_mingguan_tahun
     CHECK (tahun BETWEEN 1900 AND 2200),
   CONSTRAINT chk_dataset_mingguan_bulan
@@ -117,13 +119,19 @@ CREATE TABLE IF NOT EXISTS dataset_mingguan (
     CHECK (total_penjualan >= 0)
 );
 
+CREATE INDEX IF NOT EXISTS idx_dataset_mingguan_produk_id
+  ON dataset_mingguan (produk_id);
+
 CREATE INDEX IF NOT EXISTS idx_dataset_mingguan_produk_tahun_bulan
   ON dataset_mingguan (produk_id, tahun, bulan, minggu_ke);
 
 CREATE INDEX IF NOT EXISTS idx_dataset_mingguan_period_label
   ON dataset_mingguan (period_label);
 
-CREATE OR REPLACE FUNCTION set_core_updated_at_timestamp()
+COMMENT ON TABLE dataset_mingguan IS
+  'Compatibility baseline for actual outgoing transaction aggregation. Not a source for monthly ending inventory forecasts.';
+
+CREATE OR REPLACE FUNCTION set_core_schema_updated_at()
 RETURNS TRIGGER AS $$
 BEGIN
   NEW.updated_at = NOW();
@@ -135,30 +143,30 @@ DROP TRIGGER IF EXISTS trg_pengguna_updated_at ON pengguna;
 CREATE TRIGGER trg_pengguna_updated_at
 BEFORE UPDATE ON pengguna
 FOR EACH ROW
-EXECUTE FUNCTION set_core_updated_at_timestamp();
+EXECUTE FUNCTION set_core_schema_updated_at();
 
 DROP TRIGGER IF EXISTS trg_kategori_updated_at ON kategori;
 CREATE TRIGGER trg_kategori_updated_at
 BEFORE UPDATE ON kategori
 FOR EACH ROW
-EXECUTE FUNCTION set_core_updated_at_timestamp();
+EXECUTE FUNCTION set_core_schema_updated_at();
 
 DROP TRIGGER IF EXISTS trg_produk_updated_at ON produk;
 CREATE TRIGGER trg_produk_updated_at
 BEFORE UPDATE ON produk
 FOR EACH ROW
-EXECUTE FUNCTION set_core_updated_at_timestamp();
+EXECUTE FUNCTION set_core_schema_updated_at();
 
 DROP TRIGGER IF EXISTS trg_transaksi_updated_at ON transaksi;
 CREATE TRIGGER trg_transaksi_updated_at
 BEFORE UPDATE ON transaksi
 FOR EACH ROW
-EXECUTE FUNCTION set_core_updated_at_timestamp();
+EXECUTE FUNCTION set_core_schema_updated_at();
 
 DROP TRIGGER IF EXISTS trg_dataset_mingguan_updated_at ON dataset_mingguan;
 CREATE TRIGGER trg_dataset_mingguan_updated_at
 BEFORE UPDATE ON dataset_mingguan
 FOR EACH ROW
-EXECUTE FUNCTION set_core_updated_at_timestamp();
+EXECUTE FUNCTION set_core_schema_updated_at();
 
 COMMIT;
