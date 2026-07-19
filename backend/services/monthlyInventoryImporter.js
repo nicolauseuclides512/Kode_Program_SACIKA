@@ -445,6 +445,99 @@ async function updateImportBatchStatus(client, batchId, status, detail) {
   );
 }
 
+function formatPeriodValue(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+
+  const text = String(value);
+  return text.includes("T") ? text.slice(0, 10) : text.slice(0, 10);
+}
+
+function toInteger(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function classifyImportQualityRow(row, expectedPeriodCount) {
+  const observationCount = toInteger(row.observation_count);
+  const zeroCount = toInteger(row.zero_count);
+  const missingCount = Math.max(expectedPeriodCount - observationCount, 0);
+  const zeroRatio = observationCount > 0 ? zeroCount / observationCount : 0;
+
+  if (observationCount < 18) return "not_eligible";
+  if (missingCount > 0 || zeroRatio >= 0.5) return "warning";
+  return "eligible";
+}
+
+async function getInventoryImportValidationSummary(db, options = {}) {
+  const expectedPeriods = options.expectedPeriods || createExpectedPeriods();
+  const expectedPeriodCount = expectedPeriods.length;
+
+  const productCountResult = await db.query("SELECT COUNT(*)::int AS jumlah FROM produk");
+  const aliasCountResult = await db.query("SELECT COUNT(*)::int AS jumlah FROM product_alias");
+  const snapshotCountResult = await db.query(
+    `
+      SELECT
+        COUNT(*) FILTER (WHERE status_data = 'observed')::int AS observed_count,
+        COUNT(*) FILTER (WHERE status_data = 'missing')::int AS missing_count
+      FROM inventory_snapshot_monthly
+    `,
+  );
+  const periodRangeResult = await db.query(
+    `
+      SELECT MIN(periode)::date AS periode_min,
+             MAX(periode)::date AS periode_max
+      FROM inventory_snapshot_monthly
+    `,
+  );
+  const qualityRowsResult = await db.query(
+    `
+      SELECT
+        p.id,
+        COUNT(DISTINCT CASE
+          WHEN ism.status_data IN ('observed', 'corrected')
+            AND ism.stok_akhir IS NOT NULL
+          THEN ism.periode
+        END)::int AS observation_count,
+        COUNT(DISTINCT CASE
+          WHEN ism.status_data IN ('observed', 'corrected')
+            AND ism.stok_akhir = 0
+          THEN ism.periode
+        END)::int AS zero_count
+      FROM produk p
+      LEFT JOIN inventory_snapshot_monthly ism
+        ON ism.produk_id = p.id
+      GROUP BY p.id
+      ORDER BY p.id
+    `,
+  );
+
+  const statusCounts = {
+    eligible: 0,
+    warning: 0,
+    not_eligible: 0,
+  };
+
+  for (const row of qualityRowsResult.rows) {
+    statusCounts[classifyImportQualityRow(row, expectedPeriodCount)] += 1;
+  }
+
+  const snapshotCounts = snapshotCountResult.rows[0] || {};
+  const periodRange = periodRangeResult.rows[0] || {};
+
+  return {
+    product_count: toInteger(productCountResult.rows[0]?.jumlah),
+    alias_count: toInteger(aliasCountResult.rows[0]?.jumlah),
+    observed_snapshot_count: toInteger(snapshotCounts.observed_count),
+    missing_snapshot_count: toInteger(snapshotCounts.missing_count),
+    unresolved_count: toInteger(options.unresolvedCount),
+    periode_min: formatPeriodValue(periodRange.periode_min),
+    periode_max: formatPeriodValue(periodRange.periode_max),
+    eligible_count: statusCounts.eligible,
+    warning_count: statusCounts.warning,
+    not_eligible_count: statusCounts.not_eligible,
+  };
+}
 async function importMonthlyInventory(db, filePath, options = {}) {
   const parsedWorkbook = readMonthlyInventoryWorkbook(filePath, options);
   const aliasRows = await loadProductAliases(db);
@@ -455,6 +548,10 @@ async function importMonthlyInventory(db, filePath, options = {}) {
     options.unresolvedOutputPath,
     options.unresolvedFormat || "json",
   );
+  const details = {
+    unresolved_products: plan.unresolvedProducts,
+    duplicate_observed: plan.duplicateObserved,
+  };
 
   if (options.dryRun) {
     return {
@@ -462,14 +559,17 @@ async function importMonthlyInventory(db, filePath, options = {}) {
       saved: false,
       unresolvedReportPath,
       ...plan.summary,
+      periodsVerified: parsedWorkbook.periods.length,
+      details,
     };
   }
 
   const client = await db.connect();
+  let batchId = null;
 
   try {
     await client.query("BEGIN");
-    const batchId = await createImportBatch(client, parsedWorkbook, plan);
+    batchId = await createImportBatch(client, parsedWorkbook, plan);
 
     for (const snapshot of plan.observedSnapshots) {
       await upsertSnapshot(client, snapshot);
@@ -487,14 +587,6 @@ async function importMonthlyInventory(db, filePath, options = {}) {
       unresolved_report_path: unresolvedReportPath,
     });
     await client.query("COMMIT");
-
-    return {
-      dryRun: false,
-      saved: true,
-      importBatchId: batchId,
-      unresolvedReportPath,
-      ...plan.summary,
-    };
   } catch (error) {
     await client.query("ROLLBACK");
 
@@ -522,15 +614,32 @@ async function importMonthlyInventory(db, filePath, options = {}) {
   } finally {
     client.release();
   }
-}
 
+  const postImportValidation = await getInventoryImportValidationSummary(db, {
+    expectedPeriods: parsedWorkbook.periods,
+    unresolvedCount: plan.summary.unresolvedProducts,
+  });
+
+  return {
+    dryRun: false,
+    saved: true,
+    importBatchId: batchId,
+    unresolvedReportPath,
+    ...plan.summary,
+    periodsVerified: parsedWorkbook.periods.length,
+    details,
+    postImportValidation,
+  };
+}
 module.exports = {
   createExpectedPeriods,
   parseNumber,
   parseSheetPeriod,
   readMonthlyInventoryWorkbook,
   buildImportPlan,
+  getInventoryImportValidationSummary,
   importMonthlyInventory,
   toUnresolvedCsv,
   writeUnresolvedReport,
 };
+
