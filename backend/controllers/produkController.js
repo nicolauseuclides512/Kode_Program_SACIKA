@@ -1,4 +1,5 @@
 const db = require("../config/database");
+const { createHttpError } = require("../utils/httpError");
 
 function parseNonNegativeNumber(value, fieldName, fallback = null) {
   if (value === undefined || value === null || value === "") return fallback;
@@ -98,28 +99,27 @@ function normalizeProductPayload(body = {}, current = {}) {
   };
 }
 
-function handleControllerError(res, error) {
-  if (error.statusCode) {
-    return res.status(error.statusCode).json({ message: error.message });
-  }
+function translateProductError(error) {
+  if (error.statusCode) return error;
 
   if (error.code === "23505") {
-    return res.status(409).json({
-      message: "Nama atau kode produk sudah digunakan",
+    return createHttpError(409, "Nama atau kode produk sudah digunakan", {
+      code: "PRODUCT_CONFLICT",
+      cause: error,
     });
   }
 
   if (error.code === "23503") {
-    return res.status(400).json({
-      message: "Kategori produk tidak ditemukan",
+    return createHttpError(409, "Kategori produk tidak ditemukan atau data produk masih digunakan", {
+      code: "PRODUCT_REFERENCE_CONFLICT",
+      cause: error,
     });
   }
 
-  console.error("Produk controller error:", error.message);
-  return res.status(500).json({ message: "Terjadi kesalahan pada server" });
+  return error;
 }
 
-exports.getProduk = async (req, res) => {
+exports.getProduk = async (req, res, next) => {
   try {
     const result = await db.query(`
       SELECT
@@ -132,11 +132,11 @@ exports.getProduk = async (req, res) => {
 
     return res.json(result.rows);
   } catch (error) {
-    return handleControllerError(res, error);
+    return next(translateProductError(error));
   }
 };
 
-exports.getProdukById = async (req, res) => {
+exports.getProdukById = async (req, res, next) => {
   try {
     const result = await db.query(
       `
@@ -154,11 +154,11 @@ exports.getProdukById = async (req, res) => {
 
     return res.json(result.rows[0]);
   } catch (error) {
-    return handleControllerError(res, error);
+    return next(translateProductError(error));
   }
 };
 
-exports.tambahProduk = async (req, res) => {
+exports.tambahProduk = async (req, res, next) => {
   try {
     const payload = normalizeProductPayload(req.body);
     const result = await db.query(
@@ -195,11 +195,11 @@ exports.tambahProduk = async (req, res) => {
       produk: result.rows[0],
     });
   } catch (error) {
-    return handleControllerError(res, error);
+    return next(translateProductError(error));
   }
 };
 
-exports.updateProduk = async (req, res) => {
+exports.updateProduk = async (req, res, next) => {
   try {
     const currentResult = await db.query(
       "SELECT * FROM produk WHERE id=$1",
@@ -245,11 +245,11 @@ exports.updateProduk = async (req, res) => {
       produk: result.rows[0],
     });
   } catch (error) {
-    return handleControllerError(res, error);
+    return next(translateProductError(error));
   }
 };
 
-exports.deleteProduk = async (req, res) => {
+exports.deleteProduk = async (req, res, next) => {
   try {
     const result = await db.query(
       "DELETE FROM produk WHERE id=$1 RETURNING id",
@@ -263,12 +263,13 @@ exports.deleteProduk = async (req, res) => {
     return res.json({ message: "Produk berhasil dihapus" });
   } catch (error) {
     if (error.code === "23503") {
-      return res.status(409).json({
-        message: "Produk tidak dapat dihapus karena masih mempunyai data terkait",
-      });
+      return next(createHttpError(409,
+        "Produk tidak dapat dihapus karena masih mempunyai data terkait",
+        { code: "PRODUCT_IN_USE", cause: error },
+      ));
     }
 
-    return handleControllerError(res, error);
+    return next(translateProductError(error));
   }
 };
 

@@ -1,4 +1,7 @@
 const test = require("node:test");
+process.env.FORECAST_WORKER_API_KEY = process.env.FORECAST_WORKER_API_KEY
+  || "test-worker-api-key-1234567890abcdef";
+
 const assert = require("node:assert/strict");
 
 const {
@@ -166,6 +169,10 @@ test("runInventoryForecast saves one forecast_run, candidate models, backtest, a
   });
 
   assert.equal(httpClient.calls[0].url, "http://worker.test/predict");
+  assert.equal(
+    httpClient.calls[0].config.headers["X-Worker-API-Key"],
+    process.env.FORECAST_WORKER_API_KEY,
+  );
   assert.deepEqual(httpClient.calls[0].payload.periods.slice(0, 2), ["2024-01", "2024-02"]);
   assert.equal(result.forecast_run_id, 50);
   assert.deepEqual(result.forecast_result_ids, [1, 2]);

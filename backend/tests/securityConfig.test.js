@@ -2,6 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const {
+  getCorsAllowedOrigins,
+  getForecastWorkerApiKey,
   getJwtSecret,
   getLoginRateLimitConfig,
   isPlaceholderSecret,
@@ -26,6 +28,9 @@ function withEnv(values, callback) {
   }
 }
 
+const STRONG_JWT = "4b2fd969f8cb9f07490e3a269e8fd6c73dff13c44f1e74c1";
+const STRONG_WORKER_KEY = "1f9b37c1d4d3470ea2b4850242a6f64e";
+
 test("JWT secret rejects missing, short, and placeholder values", () => {
   withEnv({ JWT_SECRET: undefined }, () => {
     assert.throws(() => getJwtSecret(), /belum diatur/);
@@ -41,16 +46,29 @@ test("JWT secret rejects missing, short, and placeholder values", () => {
 });
 
 test("JWT secret accepts a strong non-placeholder value", () => {
-  const secret = "4b2fd969f8cb9f07490e3a269e8fd6c73dff13c44f1e74c1";
-  withEnv({ JWT_SECRET: secret }, () => {
-    assert.equal(getJwtSecret(), secret);
+  withEnv({ JWT_SECRET: STRONG_JWT }, () => {
+    assert.equal(getJwtSecret(), STRONG_JWT);
   });
 });
 
-test("runtime validation checks database, JWT, and rate-limit numbers", () => {
+test("worker API key is required and must be strong", () => {
+  withEnv({ FORECAST_WORKER_API_KEY: undefined }, () => {
+    assert.throws(() => getForecastWorkerApiKey(), /belum diatur/);
+  });
+  withEnv({ FORECAST_WORKER_API_KEY: "short" }, () => {
+    assert.throws(() => getForecastWorkerApiKey(), /minimal 32 karakter/);
+  });
+  withEnv({ FORECAST_WORKER_API_KEY: STRONG_WORKER_KEY }, () => {
+    assert.equal(getForecastWorkerApiKey(), STRONG_WORKER_KEY);
+  });
+});
+
+test("runtime validation checks database, secrets, CORS, and rate-limit numbers", () => {
   withEnv({
     DATABASE_URL: "postgresql://localhost/sacika",
-    JWT_SECRET: "4b2fd969f8cb9f07490e3a269e8fd6c73dff13c44f1e74c1",
+    JWT_SECRET: STRONG_JWT,
+    FORECAST_WORKER_API_KEY: STRONG_WORKER_KEY,
+    CORS_ALLOWED_ORIGINS: "http://localhost:5173",
     LOGIN_RATE_LIMIT_MAX_ATTEMPTS: "0",
   }, () => {
     assert.throws(() => validateRuntimeEnvironment(), /LOGIN_RATE_LIMIT_MAX_ATTEMPTS/);
@@ -68,6 +86,22 @@ test("login rate-limit config reads valid environment values", () => {
       maxAttempts: 4,
       blockMs: 120000,
     });
+  });
+});
+
+test("CORS origins are read from env, deduplicated, and wildcard is rejected", () => {
+  withEnv({
+    NODE_ENV: "production",
+    CORS_ALLOWED_ORIGINS: "http://localhost:5173,https://sacika.example,http://localhost:5173",
+  }, () => {
+    assert.deepEqual(getCorsAllowedOrigins(), [
+      "http://localhost:5173",
+      "https://sacika.example",
+    ]);
+  });
+
+  withEnv({ NODE_ENV: "production", CORS_ALLOWED_ORIGINS: "*" }, () => {
+    assert.throws(() => getCorsAllowedOrigins(), /wildcard/);
   });
 });
 

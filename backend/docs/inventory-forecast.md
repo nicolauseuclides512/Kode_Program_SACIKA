@@ -163,3 +163,61 @@ Worker membandingkan Naive, SES, Damped Holt, dan ARIMA sederhana menggunakan
 rolling-origin validation. Pemilihan menggunakan MAE, dengan RMSE sebagai
 pembanding ketika MAE sangat dekat. WAPE tetap dilaporkan. Sistem tidak memakai
 `100 - MAPE` sebagai akurasi.
+
+## Kebijakan stabilitas pemilihan model
+
+Pemilihan model menggunakan dua pengaman agar model kompleks tidak dipilih hanya
+karena unggul sangat tipis pada enam fold evaluasi:
+
+1. MAE yang berbeda tidak lebih dari persentase toleransi dianggap setara. RMSE
+   digunakan sebagai pemecah seri, kemudian model yang lebih sederhana dipilih.
+2. Model selain Naive hanya dipilih apabila penurunan MAE terhadap Naive mencapai
+   batas minimum yang ditentukan.
+
+Konfigurasi default:
+
+```env
+FORECAST_MIN_IMPROVEMENT_OVER_NAIVE_PCT=5
+FORECAST_MAE_TIE_RELATIVE_TOLERANCE_PCT=1
+```
+
+Response worker menyertakan objek `selection` dan penanda `selected` pada setiap
+`candidate_models` agar alasan pemilihan dapat diaudit.
+
+## Kebijakan ARIMA
+
+Kandidat ARIMA dibatasi pada model non-musiman sederhana:
+
+```text
+ARIMA(1,0,0)
+ARIMA(0,1,1)
+ARIMA(1,1,0)
+```
+
+Tidak ada pencarian orde di atas satu, tidak ada seasonal ARIMA, dan ARIMA hanya
+boleh dilatih ketika tersedia minimal 18 observasi bulanan kontinu.
+
+## Integritas rolling-origin
+
+Nilai aktual pada fold pengujian diambil langsung dari snapshot terobservasi.
+Nilai test tidak di-clipping, tidak di-winsorize, tidak di-cap, dan tidak diubah
+menggunakan statistik training. Prediksi negatif hanya dibatasi pada nol karena
+stok tidak dapat negatif. Tidak ada batas atas prediksi; prediksi yang jauh dari
+histori hanya menghasilkan warning.
+
+## Autentikasi backend ke worker
+
+Endpoint worker `POST /predict` wajib menerima header:
+
+```http
+X-Worker-API-Key: <shared-secret>
+```
+
+Nilai berikut harus sama pada `backend/.env` dan `sacika-worker/.env`:
+
+```env
+FORECAST_WORKER_API_KEY=<random-secret-minimal-32-karakter>
+```
+
+Endpoint `/health` tetap dapat diakses tanpa API key dan hanya mengembalikan
+status umum serta apakah keamanan worker sudah dikonfigurasi.

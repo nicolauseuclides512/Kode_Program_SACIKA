@@ -76,17 +76,28 @@ def _failure_response(model_name, error, folds=None, minimum_training=18):
             "wape": None,
         },
         "folds": folds or [],
+        "evaluation_policy": {
+            "training_values": "raw_observed",
+            "test_values": "raw_observed",
+            "test_value_transformation": "none",
+        },
         "error": str(error),
     }
 
 
 def rolling_origin_validation(values, model_func, minimum_training=18):
+    """Rolling-origin tanpa clipping atau transformasi nilai aktual test.
+
+    Setiap model menerima salinan immutable dari data training. Nilai aktual pada
+    setiap fold diambil langsung dari seri sumber dan tidak pernah di-cap,
+    di-winsorize, atau diubah berdasarkan statistik training.
+    """
     model_name = _model_name(model_func)
 
     if values is None:
         return _failure_response(model_name, "values tidak boleh kosong", minimum_training=minimum_training)
 
-    series = list(values)
+    series = tuple(values)
     if len(series) <= minimum_training:
         return _failure_response(
             model_name,
@@ -99,7 +110,7 @@ def rolling_origin_validation(values, model_func, minimum_training=18):
     successful_predictions = []
 
     for test_index in range(minimum_training, len(series)):
-        training = series[:test_index]
+        training = tuple(series[:test_index])
         actual = series[test_index]
         fold = {
             "fold": len(folds) + 1,
@@ -160,5 +171,10 @@ def rolling_origin_validation(values, model_func, minimum_training=18):
             "wape": round_metric(wape(successful_actuals, successful_predictions)),
         },
         "folds": folds,
+        "evaluation_policy": {
+            "training_values": "raw_observed",
+            "test_values": "raw_observed",
+            "test_value_transformation": "none",
+        },
         "error": None,
     }

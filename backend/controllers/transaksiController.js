@@ -6,64 +6,56 @@ const {
   updateStockTransaction,
 } = require("../services/stockTransactionService");
 
-function sendStockTransactionError(res, error, operation) {
-  const statusCode = error instanceof StockTransactionError
-    ? error.statusCode
-    : 500;
-
-  if (statusCode >= 500) {
-    console.error(`Error ${operation} transaksi:`, error);
+function sendStockTransactionError(res, next, error) {
+  if (error instanceof StockTransactionError && error.statusCode < 500) {
+    return res.status(error.statusCode).json({
+      message: error.message,
+      ...(error.details ? { details: error.details } : {}),
+    });
   }
 
-  return res.status(statusCode).json({
-    message: error.message || "Database error",
-    ...(error.details ? { details: error.details } : {}),
-  });
+  return next(error);
 }
 
-exports.getTransaksi = (req, res) => {
-  const query = `
-    SELECT
-      transaksi.*,
-      produk.nama_produk
-    FROM transaksi
-    LEFT JOIN produk ON transaksi.produk_id = produk.id
-    ORDER BY transaksi.tanggal DESC, transaksi.id DESC
-  `;
-
-  db.query(query, (err, result) => {
-    if (err) {
-      console.error("Error fetching transaksi:", err);
-      return res.status(500).json({ message: "Gagal mengambil transaksi" });
-    }
-
+exports.getTransaksi = async (req, res, next) => {
+  try {
+    const result = await db.query(`
+      SELECT
+        transaksi.*,
+        produk.nama_produk
+      FROM transaksi
+      LEFT JOIN produk ON transaksi.produk_id = produk.id
+      ORDER BY transaksi.tanggal DESC, transaksi.id DESC
+    `);
     return res.json(result.rows);
-  });
+  } catch (error) {
+    return next(error);
+  }
 };
 
-exports.tambahTransaksi = async (req, res) => {
+exports.tambahTransaksi = async (req, res, next) => {
   try {
     const result = await createStockTransaction(db, req.body);
     return res.json(result);
   } catch (error) {
-    return sendStockTransactionError(res, error, "creating");
+    return sendStockTransactionError(res, next, error);
   }
 };
 
-exports.updateTransaksi = async (req, res) => {
+exports.updateTransaksi = async (req, res, next) => {
   try {
     const result = await updateStockTransaction(db, req.params.id, req.body);
     return res.json(result);
   } catch (error) {
-    return sendStockTransactionError(res, error, "updating");
+    return sendStockTransactionError(res, next, error);
   }
 };
 
-exports.hapusTransaksi = async (req, res) => {
+exports.hapusTransaksi = async (req, res, next) => {
   try {
     const result = await deleteStockTransaction(db, req.params.id);
     return res.json(result);
   } catch (error) {
-    return sendStockTransactionError(res, error, "deleting");
+    return sendStockTransactionError(res, next, error);
   }
 };

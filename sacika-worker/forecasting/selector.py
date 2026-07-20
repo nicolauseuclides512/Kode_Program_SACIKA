@@ -1,3 +1,4 @@
+import os
 from functools import partial
 
 from .metrics import rolling_origin_validation, zero_ratio
@@ -11,12 +12,49 @@ from .models import (
 from .validation import validate_prediction_payload
 
 
-MAE_TIE_TOLERANCE = 1e-6
+DEFAULT_MAE_TIE_RELATIVE_TOLERANCE_PCT = 1.0
+DEFAULT_MIN_IMPROVEMENT_OVER_NAIVE_PCT = 5.0
 HIGH_ZERO_RATIO_THRESHOLD = 0.5
+MODEL_COMPLEXITY_RANK = {
+    "Naive": 0,
+    "SES": 1,
+    "Damped Holt": 2,
+    "ARIMA": 3,
+}
 
 
 class ForecastSelectionError(Exception):
     pass
+
+
+def _read_percentage_env(name, default):
+    raw_value = os.environ.get(name)
+    if raw_value is None or str(raw_value).strip() == "":
+        return float(default)
+
+    try:
+        value = float(raw_value)
+    except ValueError as error:
+        raise ForecastSelectionError(f"{name} harus numerik") from error
+
+    if value < 0 or value > 100:
+        raise ForecastSelectionError(f"{name} harus berada antara 0 dan 100")
+
+    return value
+
+
+def get_mae_tie_relative_tolerance_pct():
+    return _read_percentage_env(
+        "FORECAST_MAE_TIE_RELATIVE_TOLERANCE_PCT",
+        DEFAULT_MAE_TIE_RELATIVE_TOLERANCE_PCT,
+    )
+
+
+def get_min_improvement_over_naive_pct():
+    return _read_percentage_env(
+        "FORECAST_MIN_IMPROVEMENT_OVER_NAIVE_PCT",
+        DEFAULT_MIN_IMPROVEMENT_OVER_NAIVE_PCT,
+    )
 
 
 def _period_to_year_month(period):
@@ -69,6 +107,8 @@ def _candidate_summary(display_name, evaluation, metadata=None):
         "test_points": evaluation.get("fold_count", 0),
         "error": evaluation.get("error"),
         "metadata": metadata or {},
+        "selected": False,
+        "improvement_over_naive_pct": None,
     }
 
 
@@ -79,17 +119,41 @@ def _successful_candidate(candidate):
     )
 
 
-def _is_better_candidate(candidate, current_best):
+def _relative_tolerance(first_value, second_value, percentage):
+    scale = max(abs(float(first_value)), abs(float(second_value)), 1.0)
+    return scale * (float(percentage) / 100.0)
+
+
+def _candidate_rank(candidate):
+    return MODEL_COMPLEXITY_RANK.get(candidate.get("display_name"), 999)
+
+
+def _is_better_candidate(candidate, current_best, relative_tolerance_pct=None):
     if current_best is None:
         return True
 
+    tolerance_pct = (
+        get_mae_tie_relative_tolerance_pct()
+        if relative_tolerance_pct is None
+        else float(relative_tolerance_pct)
+    )
+
     candidate_metrics = candidate["evaluation"]["metrics"]
     best_metrics = current_best["evaluation"]["metrics"]
-    candidate_mae = candidate_metrics["mae"]
-    best_mae = best_metrics["mae"]
+    candidate_mae = float(candidate_metrics["mae"])
+    best_mae = float(best_metrics["mae"])
+    mae_tolerance = _relative_tolerance(candidate_mae, best_mae, tolerance_pct)
 
-    if abs(candidate_mae - best_mae) <= MAE_TIE_TOLERANCE:
-        return candidate_metrics["rmse"] < best_metrics["rmse"]
+    if abs(candidate_mae - best_mae) <= mae_tolerance:
+        candidate_rmse = float(candidate_metrics["rmse"])
+        best_rmse = float(best_metrics["rmse"])
+        rmse_tolerance = _relative_tolerance(candidate_rmse, best_rmse, tolerance_pct)
+
+        if candidate_rmse < best_rmse - rmse_tolerance:
+            return True
+        if abs(candidate_rmse - best_rmse) <= rmse_tolerance:
+            return _candidate_rank(candidate) < _candidate_rank(current_best)
+        return False
 
     return candidate_mae < best_mae
 
@@ -119,9 +183,15 @@ def _evaluate_arima(values):
             "summary": _candidate_summary(
                 "ARIMA",
                 evaluation,
-                metadata={"order": list(order)},
+                metadata={
+                    "order": list(order),
+                    "candidate_policy": "simple_non_seasonal",
+                },
             ),
-            "metadata": {"order": list(order)},
+            "metadata": {
+                "order": list(order),
+                "candidate_policy": "simple_non_seasonal",
+            },
         }
         order_summaries.append(candidate["summary"])
 
@@ -139,7 +209,7 @@ def _evaluate_arima(values):
                 "failed_fold_count": 0,
                 "metrics": {"mae": None, "rmse": None, "wape": None},
                 "folds": [],
-                "error": "Semua kandidat ARIMA gagal dievaluasi",
+                "error": "Semua kandidat ARIMA sederhana gagal dievaluasi",
             },
             "summary": {
                 "model": "ARIMA",
@@ -148,10 +218,18 @@ def _evaluate_arima(values):
                 "rmse": None,
                 "wape": None,
                 "test_points": 0,
-                "error": "Semua kandidat ARIMA gagal dievaluasi",
-                "metadata": {"orders": order_summaries},
+                "error": "Semua kandidat ARIMA sederhana gagal dievaluasi",
+                "metadata": {
+                    "orders": order_summaries,
+                    "candidate_policy": "simple_non_seasonal",
+                },
+                "selected": False,
+                "improvement_over_naive_pct": None,
             },
-            "metadata": {"orders": order_summaries},
+            "metadata": {
+                "orders": order_summaries,
+                "candidate_policy": "simple_non_seasonal",
+            },
         }
 
     best_arima["summary"]["metadata"]["orders"] = [
@@ -170,6 +248,77 @@ def _evaluate_arima(values):
     return best_arima
 
 
+def _improvement_percentage(reference_mae, candidate_mae):
+    reference = float(reference_mae)
+    candidate = float(candidate_mae)
+
+    if reference <= 0:
+        return 0.0
+
+    return ((reference - candidate) / reference) * 100.0
+
+
+def _apply_naive_guard(candidates, best_overall):
+    naive_candidate = next(
+        (
+            candidate
+            for candidate in candidates
+            if candidate["display_name"] == "Naive" and _successful_candidate(candidate)
+        ),
+        None,
+    )
+    minimum_improvement_pct = get_min_improvement_over_naive_pct()
+    tie_tolerance_pct = get_mae_tie_relative_tolerance_pct()
+
+    if naive_candidate is None:
+        return best_overall, {
+            "policy": "best_available_without_naive_baseline",
+            "selected_model": best_overall["display_name"],
+            "naive_mae": None,
+            "selected_mae": best_overall["evaluation"]["metrics"]["mae"],
+            "improvement_over_naive_pct": None,
+            "minimum_improvement_required_pct": minimum_improvement_pct,
+            "mae_tie_relative_tolerance_pct": tie_tolerance_pct,
+            "reason": "Naive gagal dievaluasi sehingga model terbaik yang tersedia digunakan",
+        }
+
+    naive_mae = naive_candidate["evaluation"]["metrics"]["mae"]
+    best_mae = best_overall["evaluation"]["metrics"]["mae"]
+    improvement_pct = _improvement_percentage(naive_mae, best_mae)
+
+    if best_overall["display_name"] == "Naive":
+        selected = naive_candidate
+        reason = "Naive mempunyai performa terbaik atau setara dalam toleransi"
+        policy = "naive_best_or_tied"
+    elif improvement_pct + 1e-12 < minimum_improvement_pct:
+        selected = naive_candidate
+        reason = (
+            f"Peningkatan MAE model terbaik hanya {improvement_pct:.2f}% dan belum "
+            f"mencapai batas {minimum_improvement_pct:.2f}% dibanding Naive"
+        )
+        policy = "naive_minimum_improvement_guard"
+    else:
+        selected = best_overall
+        reason = (
+            f"Model terpilih meningkatkan MAE {improvement_pct:.2f}% dibanding Naive, "
+            f"melewati batas {minimum_improvement_pct:.2f}%"
+        )
+        policy = "challenger_exceeds_naive_threshold"
+
+    return selected, {
+        "policy": policy,
+        "selected_model": selected["display_name"],
+        "naive_mae": naive_mae,
+        "selected_mae": selected["evaluation"]["metrics"]["mae"],
+        "best_challenger_model": best_overall["display_name"],
+        "best_challenger_mae": best_mae,
+        "improvement_over_naive_pct": round(improvement_pct, 4),
+        "minimum_improvement_required_pct": minimum_improvement_pct,
+        "mae_tie_relative_tolerance_pct": tie_tolerance_pct,
+        "reason": reason,
+    }
+
+
 def evaluate_candidate_models(values):
     candidates = [
         _evaluate_model("Naive", naive_forecast, values),
@@ -178,15 +327,38 @@ def evaluate_candidate_models(values):
         _evaluate_arima(values),
     ]
 
-    best = None
+    best_overall = None
     for candidate in candidates:
-        if _successful_candidate(candidate) and _is_better_candidate(candidate, best):
-            best = candidate
+        if _successful_candidate(candidate) and _is_better_candidate(candidate, best_overall):
+            best_overall = candidate
 
-    if best is None:
+    if best_overall is None:
         raise ForecastSelectionError("Tidak ada model yang berhasil dievaluasi")
 
-    return best, [candidate["summary"] for candidate in candidates]
+    selected, selection = _apply_naive_guard(candidates, best_overall)
+    naive_candidate = next(
+        (candidate for candidate in candidates if candidate["display_name"] == "Naive"),
+        None,
+    )
+    naive_mae = (
+        naive_candidate["evaluation"]["metrics"]["mae"]
+        if naive_candidate and _successful_candidate(naive_candidate)
+        else None
+    )
+
+    for candidate in candidates:
+        summary = candidate["summary"]
+        summary["selected"] = candidate is selected
+        if naive_mae is not None and _successful_candidate(candidate):
+            summary["improvement_over_naive_pct"] = round(
+                _improvement_percentage(
+                    naive_mae,
+                    candidate["evaluation"]["metrics"]["mae"],
+                ),
+                4,
+            )
+
+    return selected, [candidate["summary"] for candidate in candidates], selection
 
 
 def _backtest_rows(best_candidate, valid_periods):
@@ -248,7 +420,7 @@ def handle_prediction_request(payload):
         validated_payload["values"],
     )
 
-    best_candidate, candidate_summaries = evaluate_candidate_models(valid_values)
+    best_candidate, candidate_summaries, selection = evaluate_candidate_models(valid_values)
     forecast_result = best_candidate["forecast_func"](
         valid_values,
         validated_payload["horizon"],
@@ -277,7 +449,9 @@ def handle_prediction_request(payload):
             "rmse": evaluation_metrics["rmse"],
             "wape": evaluation_metrics["wape"],
             "test_points": best_candidate["evaluation"]["fold_count"],
+            "policy": best_candidate["evaluation"].get("evaluation_policy"),
         },
+        "selection": selection,
         "candidate_models": candidate_summaries,
         "backtest": _backtest_rows(best_candidate, valid_periods),
         "warning": _warning_messages(validated_payload, valid_values, forecast_values),

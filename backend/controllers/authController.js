@@ -7,8 +7,7 @@ function normalizeUsername(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-
-exports.login = async (req, res) => {
+exports.login = async (req, res, next) => {
   const username = normalizeUsername(req.body?.username);
   const password = typeof req.body?.password === "string" ? req.body.password : "";
 
@@ -81,9 +80,6 @@ exports.login = async (req, res) => {
       token,
     });
   } catch (error) {
-    console.error("Login gagal:", error.message);
-    return res.status(500).json({
-      message: "Terjadi kesalahan pada server",
-    });
+    return next(error);
   }
 };

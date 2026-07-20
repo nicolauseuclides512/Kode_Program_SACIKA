@@ -7,12 +7,32 @@ from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.holtwinters import Holt, SimpleExpSmoothing
 
 
+# Kandidat ARIMA sengaja dibatasi pada model non-musiman sederhana.
+# Tidak ada grid p/d/q di atas 1 dan tidak ada model dengan total orde > 2.
 ALLOWED_ARIMA_ORDERS = (
     (1, 0, 0),
     (0, 1, 1),
     (1, 1, 0),
-    (1, 1, 1),
 )
+ARIMA_MIN_OBSERVATIONS = 18
+ARIMA_MAX_ITERATIONS = 100
+
+
+def is_simple_arima_order(order):
+    try:
+        normalized = tuple(int(value) for value in order)
+    except (TypeError, ValueError):
+        return False
+
+    if len(normalized) != 3:
+        return False
+
+    p, d, q = normalized
+    return (
+        normalized in ALLOWED_ARIMA_ORDERS
+        and all(value in (0, 1) for value in normalized)
+        and (p + d + q) <= 2
+    )
 
 
 def _success(model_name, predictions, metadata=None):
@@ -69,12 +89,18 @@ def _validate_horizon(horizon):
 
 
 def _clean_predictions(predictions):
+    """Menjaga prediksi non-negatif tanpa membatasi nilai maksimum.
+
+    Nilai negatif dipotong hanya pada batas logis stok minimum nol. Nilai yang
+    sangat besar dipertahankan apa adanya dan akan ditandai sebagai warning oleh
+    selector. Nilai NaN/inf dianggap kegagalan model, bukan diubah diam-diam.
+    """
     cleaned = []
 
     for value in list(predictions):
         numeric_value = float(value)
         if not math.isfinite(numeric_value):
-            numeric_value = 0.0
+            raise ValueError("model menghasilkan prediksi non-finite")
         cleaned.append(max(0.0, numeric_value))
 
     return cleaned
@@ -160,39 +186,50 @@ def damped_holt_forecast(training, horizon):
         return _failed(model_name, error)
 
 
-def arima_forecast(training, horizon, order=(1, 1, 1)):
+def arima_forecast(training, horizon, order=(1, 0, 0)):
     model_name = "arima"
 
     try:
-        if tuple(order) not in ALLOWED_ARIMA_ORDERS:
-            raise ValueError(f"order {tuple(order)} tidak diizinkan")
+        normalized_order = tuple(order)
+        if not is_simple_arima_order(normalized_order):
+            raise ValueError(f"order {normalized_order} tidak diizinkan")
 
-        values = _prepare_training(training, model_name, min_length=4)
+        values = _prepare_training(
+            training,
+            model_name,
+            min_length=ARIMA_MIN_OBSERVATIONS,
+        )
         steps = _validate_horizon(horizon)
 
         def fit_model():
             model = ARIMA(
                 values,
-                order=tuple(order),
+                order=normalized_order,
                 enforce_stationarity=False,
                 enforce_invertibility=False,
             )
-            return model.fit()
+            return model.fit(method_kwargs={"maxiter": ARIMA_MAX_ITERATIONS})
 
         fit = _fit_with_convergence_as_error(fit_model)
         return _success(
             model_name,
             fit.forecast(steps=steps),
             metadata={
-                "order": list(order),
+                "order": list(normalized_order),
                 "aic": _safe_float(fit.aic),
+                "seasonal": False,
+                "candidate_policy": "simple_non_seasonal",
             },
         )
     except Exception as error:
         return _failed(
             model_name,
             error,
-            metadata={"order": list(order) if isinstance(order, tuple) else order},
+            metadata={
+                "order": list(order) if isinstance(order, tuple) else order,
+                "seasonal": False,
+                "candidate_policy": "simple_non_seasonal",
+            },
         )
 
 

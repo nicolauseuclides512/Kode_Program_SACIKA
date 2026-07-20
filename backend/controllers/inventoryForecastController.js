@@ -18,37 +18,28 @@ function getDefaultDatabase() {
   return require("../config/database");
 }
 
-function sendError(res, error, fallbackMessage) {
-  const statusCode = error.statusCode || 500;
-
-  if (statusCode >= 500) {
-    console.error(fallbackMessage, error);
-  }
+function sendKnownError(res, next, error) {
+  const statusCode = Number(error.statusCode || 500);
+  if (statusCode >= 500) return next(error);
 
   return res.status(statusCode).json({
-    message: error.message || fallbackMessage,
+    message: error.message,
     ...(error.details ? { details: error.details } : {}),
   });
 }
 
 function createInventoryForecastController(database = getDefaultDatabase(), options = {}) {
   return {
-    async getInventoryRiskSummary(req, res) {
+    async getInventoryRiskSummary(req, res, next) {
       try {
         const riskSummary = await getInventoryRiskSummary(database);
         return res.json(riskSummary);
       } catch (error) {
-        return sendError(
-          res,
-          error instanceof InventoryForecastError
-            ? error
-            : new InventoryForecastError(500, "Gagal mengambil ringkasan risiko prediksi", error.message),
-          "Error fetching inventory forecast risk:",
-        );
+        return sendKnownError(res, next, error);
       }
     },
 
-    async createInventoryForecast(req, res) {
+    async createInventoryForecast(req, res, next) {
       try {
         const forecast = await runInventoryForecast(
           database,
@@ -61,32 +52,24 @@ function createInventoryForecastController(database = getDefaultDatabase(), opti
 
         return res.json(forecast);
       } catch (error) {
-        return sendError(
-          res,
-          error instanceof InventoryForecastError
-            ? error
-            : new InventoryForecastError(500, "Gagal membuat forecast persediaan", error.message),
-          "Error creating inventory forecast:",
-        );
+        const normalized = error instanceof InventoryForecastError
+          ? error
+          : new InventoryForecastError(500, "Gagal membuat forecast persediaan");
+        if (!(error instanceof InventoryForecastError)) normalized.cause = error;
+        return sendKnownError(res, next, normalized);
       }
     },
 
-    async getLatestInventoryForecast(req, res) {
+    async getLatestInventoryForecast(req, res, next) {
       try {
         const forecast = await getLatestInventoryForecast(database, req.params.produk_id);
         return res.json(forecast);
       } catch (error) {
-        return sendError(
-          res,
-          error instanceof InventoryForecastError
-            ? error
-            : new InventoryForecastError(500, "Gagal mengambil forecast persediaan terbaru", error.message),
-          "Error fetching latest inventory forecast:",
-        );
+        return sendKnownError(res, next, error);
       }
     },
 
-    async createInventoryForecastBatch(req, res) {
+    async createInventoryForecastBatch(req, res, next) {
       try {
         const result = await runInventoryForecastBatch(database, {
           ...options,
@@ -96,17 +79,11 @@ function createInventoryForecastController(database = getDefaultDatabase(), opti
         });
         return res.json(result);
       } catch (error) {
-        return sendError(
-          res,
-          error instanceof InventoryForecastError
-            ? error
-            : new InventoryForecastError(500, "Gagal menjalankan batch forecast", error.message),
-          "Error running batch inventory forecast:",
-        );
+        return sendKnownError(res, next, error);
       }
     },
 
-    async evaluateInventoryForecasts(req, res) {
+    async evaluateInventoryForecasts(req, res, next) {
       try {
         const result = await evaluateForecastsAgainstActuals(database, {
           period: req.body?.period ?? req.query?.period,
@@ -114,28 +91,30 @@ function createInventoryForecastController(database = getDefaultDatabase(), opti
         });
         return res.json(result);
       } catch (error) {
-        return sendError(
-          res,
-          error instanceof ForecastActualEvaluationError
-            ? error
-            : new ForecastActualEvaluationError(500, "Gagal mengevaluasi forecast terhadap data aktual", error.message),
-          "Error evaluating inventory forecasts:",
-        );
+        const normalized = error instanceof ForecastActualEvaluationError
+          ? error
+          : new ForecastActualEvaluationError(
+            500,
+            "Gagal mengevaluasi forecast terhadap data aktual",
+          );
+        if (!(error instanceof ForecastActualEvaluationError)) normalized.cause = error;
+        return sendKnownError(res, next, normalized);
       }
     },
 
-    async getSalesForecastReadiness(req, res) {
+    async getSalesForecastReadiness(req, res, next) {
       try {
         const readiness = await getMonthlySalesForecastReadiness(database, req.params.produk_id);
         return res.json(readiness);
       } catch (error) {
-        return sendError(
-          res,
-          error instanceof SalesForecastReadinessError
-            ? error
-            : new SalesForecastReadinessError(500, "Gagal mengambil status kesiapan prediksi penjualan", error.message),
-          "Error fetching sales forecast readiness:",
-        );
+        const normalized = error instanceof SalesForecastReadinessError
+          ? error
+          : new SalesForecastReadinessError(
+            500,
+            "Gagal mengambil status kesiapan prediksi penjualan",
+          );
+        if (!(error instanceof SalesForecastReadinessError)) normalized.cause = error;
+        return sendKnownError(res, next, normalized);
       }
     },
   };

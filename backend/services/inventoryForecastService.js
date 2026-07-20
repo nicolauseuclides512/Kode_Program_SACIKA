@@ -1,4 +1,5 @@
 const axios = require("axios");
+const { getForecastWorkerApiKey } = require("../config/security");
 
 const {
   findLatestContiguousSegment,
@@ -255,6 +256,12 @@ function validateWorkerResponse(workerResult, produkId) {
   if (workerResult.backtest !== undefined && !Array.isArray(workerResult.backtest)) {
     errors.push("backtest worker harus array");
   }
+  if (
+    workerResult.selection !== undefined
+    && (typeof workerResult.selection !== "object" || Array.isArray(workerResult.selection))
+  ) {
+    errors.push("selection worker harus object");
+  }
 
   if (errors.length > 0) {
     throw new InventoryForecastError(502, "Response worker tidak valid", errors);
@@ -268,6 +275,7 @@ function validateWorkerResponse(workerResult, produkId) {
     forecast_values: workerResult.forecast_values.map((value) => Number(value)),
     candidate_models: workerResult.candidate_models || [],
     backtest: workerResult.backtest || [],
+    selection: workerResult.selection || null,
   };
 }
 
@@ -275,9 +283,16 @@ async function callForecastWorker(payload, options = {}) {
   const httpClient = options.httpClient || axios;
   const workerUrl = (options.workerUrl || getWorkerUrl()).replace(/\/+$/, "");
   const timeout = options.timeoutMs || getWorkerTimeoutMs();
+  const workerApiKey = options.workerApiKey || getForecastWorkerApiKey();
 
   try {
-    const response = await httpClient.post(`${workerUrl}/predict`, payload, { timeout });
+    const response = await httpClient.post(`${workerUrl}/predict`, payload, {
+      timeout,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Worker-API-Key": workerApiKey,
+      },
+    });
     return response.data;
   } catch (error) {
     if (!error.response) {
@@ -289,15 +304,30 @@ async function callForecastWorker(payload, options = {}) {
     }
 
     const workerStatus = Number(error.response.status);
+    if ([401, 403].includes(workerStatus)) {
+      throw new InventoryForecastError(
+        502,
+        "Autentikasi backend ke worker forecasting gagal",
+      );
+    }
+
+    if (workerStatus === 503) {
+      throw new InventoryForecastError(
+        503,
+        "Worker forecasting belum dikonfigurasi atau sedang tidak tersedia",
+      );
+    }
+
     const statusCode = workerStatus === 422 ? 422 : 502;
     const message = workerStatus === 422
       ? "Worker forecasting belum dapat memilih model"
       : "Worker forecasting gagal memproses request";
 
-    throw new InventoryForecastError(statusCode, message, {
-      status: error.response.status,
-      data: error.response.data,
-    });
+    throw new InventoryForecastError(
+      statusCode,
+      message,
+      workerStatus === 422 ? { status: workerStatus } : null,
+    );
   }
 }
 

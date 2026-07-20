@@ -38,6 +38,36 @@ class RollingOriginValidationTest(unittest.TestCase):
         self.assertEqual(result["folds"][-1]["actual"], 24)
         self.assertEqual(result["folds"][-1]["predicted"], 23.0)
 
+    def test_test_values_are_kept_raw_without_clipping_or_winsorizing(self):
+        values = [10.0] * 18 + [10_000.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        original = list(values)
+
+        result = rolling_origin_validation(values, naive_forecast)
+
+        self.assertEqual(result["status"], "success")
+        self.assertEqual(result["folds"][0]["actual"], 10_000.0)
+        self.assertEqual(values, original)
+        self.assertEqual(
+            result["evaluation_policy"]["test_value_transformation"],
+            "none",
+        )
+
+    def test_model_receives_immutable_training_copy(self):
+        received_types = []
+
+        def inspect_training(training, horizon):
+            received_types.append(type(training))
+            return {
+                "status": "success",
+                "model": "inspection_model",
+                "predictions": [training[-1]],
+                "error": None,
+            }
+
+        result = rolling_origin_validation([10.0] * 24, inspect_training)
+        self.assertEqual(result["status"], "success")
+        self.assertTrue(all(item is tuple for item in received_types))
+
     def test_actuals_with_zero_use_wape_denominator_from_all_actuals(self):
         values = [5.0] * 18 + [0.0, 5.0, 0.0, 5.0, 0.0, 5.0]
 

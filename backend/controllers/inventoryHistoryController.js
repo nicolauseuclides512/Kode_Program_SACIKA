@@ -4,7 +4,7 @@ const {
   getQualitySummary: getQualitySummaryService,
   parsePeriodParam,
 } = require("../services/inventoryHistoryQualityService");
-
+const { createHttpError } = require("../utils/httpError");
 
 function parseQualityOptions(query = {}) {
   const options = {};
@@ -18,13 +18,17 @@ function parseQualityOptions(query = {}) {
   }
 
   if (options.startPeriod && options.endPeriod && options.startPeriod > options.endPeriod) {
-    throw new Error("start_period tidak boleh lebih besar dari end_period");
+    throw createHttpError(400, "start_period tidak boleh lebih besar dari end_period", {
+      code: "INVALID_PERIOD_RANGE",
+    });
   }
 
   if (query.window_months !== undefined && query.window_months !== "") {
     const windowMonths = Number(query.window_months);
     if (!Number.isInteger(windowMonths) || windowMonths <= 0 || windowMonths > 120) {
-      throw new Error("window_months harus integer antara 1 dan 120");
+      throw createHttpError(400, "window_months harus integer antara 1 dan 120", {
+        code: "INVALID_WINDOW_MONTHS",
+      });
     }
     options.windowMonths = windowMonths;
   }
@@ -36,12 +40,23 @@ function getDefaultDatabase() {
   return require("../config/database");
 }
 
+function mapHistoryInputError(error) {
+  if (error.statusCode) return error;
+  if (/(period|window_months)/i.test(error.message)) {
+    return createHttpError(400, error.message, {
+      code: "INVALID_HISTORY_QUERY",
+      cause: error,
+    });
+  }
+  return error;
+}
+
 function createInventoryHistoryController(database = getDefaultDatabase()) {
   return {
-    async getInventoryHistory(req, res) {
+    async getInventoryHistory(req, res, next) {
       const produkId = Number(req.params.produk_id);
 
-      if (!produkId || Number.isNaN(produkId) || produkId <= 0) {
+      if (!Number.isInteger(produkId) || produkId <= 0) {
         return res.status(400).json({ message: "produk_id harus angka valid" });
       }
 
@@ -58,22 +73,14 @@ function createInventoryHistoryController(database = getDefaultDatabase()) {
 
         return res.json(result.data);
       } catch (error) {
-        const statusCode = /(period|window_months)/i.test(error.message) ? 400 : 500;
-
-        console.error("Error fetching inventory history:", error);
-        return res.status(statusCode).json({
-          message: statusCode === 400
-            ? error.message
-            : "Gagal mengambil histori persediaan bulanan",
-          error: error.message,
-        });
+        return next(mapHistoryInputError(error));
       }
     },
 
-    async getProductQuality(req, res) {
+    async getProductQuality(req, res, next) {
       const produkId = Number(req.params.produk_id);
 
-      if (!produkId || Number.isNaN(produkId) || produkId <= 0) {
+      if (!Number.isInteger(produkId) || produkId <= 0) {
         return res.status(400).json({ message: "produk_id harus angka valid" });
       }
 
@@ -90,15 +97,11 @@ function createInventoryHistoryController(database = getDefaultDatabase()) {
 
         return res.json(quality);
       } catch (error) {
-        console.error("Error fetching inventory quality:", error);
-        return res.status(500).json({
-          message: "Gagal mengambil kualitas histori persediaan",
-          error: error.message,
-        });
+        return next(mapHistoryInputError(error));
       }
     },
 
-    async getQualitySummary(req, res) {
+    async getQualitySummary(req, res, next) {
       try {
         const summary = await getQualitySummaryService(
           database,
@@ -106,11 +109,7 @@ function createInventoryHistoryController(database = getDefaultDatabase()) {
         );
         return res.json(summary);
       } catch (error) {
-        console.error("Error fetching inventory quality summary:", error);
-        return res.status(500).json({
-          message: "Gagal mengambil ringkasan kualitas histori persediaan",
-          error: error.message,
-        });
+        return next(mapHistoryInputError(error));
       }
     },
   };
