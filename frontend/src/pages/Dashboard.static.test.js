@@ -25,4 +25,7 @@ test("Dashboard shows forecast freshness and indicative range", () => {
   assert.match(source, /Rentang indikatif/);
   assert.match(source, /lower_bound/);
   assert.match(source, /upper_bound/);
+  assert.match(source, /data_cutoff/);
+  assert.match(source, /latest_snapshot_period/);
+  assert.match(source, /stale_by_months/);
 });

@@ -9,10 +9,6 @@ const {
   ForecastActualEvaluationError,
   evaluateForecastsAgainstActuals,
 } = require("../services/forecastActualEvaluationService");
-const {
-  SalesForecastReadinessError,
-  getMonthlySalesForecastReadiness,
-} = require("../services/salesForecastReadinessService");
 
 function getDefaultDatabase() {
   return require("../config/database");
@@ -102,21 +98,6 @@ function createInventoryForecastController(database = getDefaultDatabase(), opti
       }
     },
 
-    async getSalesForecastReadiness(req, res, next) {
-      try {
-        const readiness = await getMonthlySalesForecastReadiness(database, req.params.produk_id);
-        return res.json(readiness);
-      } catch (error) {
-        const normalized = error instanceof SalesForecastReadinessError
-          ? error
-          : new SalesForecastReadinessError(
-            500,
-            "Gagal mengambil status kesiapan prediksi penjualan",
-          );
-        if (!(error instanceof SalesForecastReadinessError)) normalized.cause = error;
-        return sendKnownError(res, next, normalized);
-      }
-    },
   };
 }
 

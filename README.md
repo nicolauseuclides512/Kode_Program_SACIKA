@@ -2,6 +2,15 @@
 
 SACIKA adalah sistem inventori koperasi dengan pipeline prediksi posisi persediaan akhir bulan. Sistem terbaru menggunakan histori persediaan bulanan dari Excel, memvalidasi kualitas data, memilih model forecasting di worker Flask, menyimpan hasil prediksi, lalu menampilkan risiko stok terhadap batas minimum produk.
 
+## Dokumentasi Terstruktur
+
+- [Instalasi Windows](docs/01-instalasi-windows.md)
+- [Database, migration, dan seed](docs/02-database-migration-seed.md)
+- [Bootstrap produk dan importer Excel](docs/03-importer-excel.md)
+- [Forecasting](docs/04-forecasting.md)
+- [Deployment](docs/05-deployment.md)
+
+
 ## Makna Data
 
 `inventory_snapshot_monthly` menyimpan posisi persediaan akhir bulan.
@@ -16,7 +25,7 @@ Data ini:
 
 Kolom `Jml` dari file Excel bulanan disimpan sebagai `stok_akhir`. Produk yang tercantum dengan `Jml = 0` tetap dianggap data observed dengan stok akhir 0. Produk yang tidak tercantum pada sheet bulan tertentu dianggap missing, bukan otomatis 0.
 
-Tabel `dataset_mingguan` masih dipertahankan sebagai baseline kode lama/agregasi penjualan masa depan. Pipeline prediksi persediaan bulanan tidak membaca tabel tersebut.
+Tabel `dataset_mingguan` dipertahankan hanya untuk kompatibilitas legacy. Endpoint `/api/dataset/aggregate` telah ditandai deprecated; agregasi baru menggunakan `/api/sales/aggregate` dan `penjualan_bulanan`. Pipeline prediksi persediaan bulanan tidak membaca tabel legacy tersebut.
 
 ## Pipeline
 
@@ -30,9 +39,10 @@ flowchart TD
   F --> G[Worker Flask POST /predict]
   G --> H[Rolling-origin validation]
   H --> I[Model selection]
-  I --> J[(forecast_result)]
-  J --> K[Frontend Prediksi]
-  J --> L[Dashboard risk warning]
+  I --> J[(forecast_run)]
+  J --> K[(forecast_result)]
+  J --> M[(forecast_backtest)]
+  K --> L[Frontend Prediksi dan Dashboard risk warning]
 ```
 
 Urutan proses:
@@ -46,8 +56,8 @@ Urutan proses:
 7. Jika observasi valid kurang dari 18 bulan, forecast ditolak.
 8. Backend mengirim `periods` dan `values` langsung ke worker Flask.
 9. Worker memilih model terbaik berdasarkan evaluasi rolling-origin.
-10. Backend menyimpan hasil ke `forecast_result`.
-11. Frontend menampilkan estimasi stok akhir bulan berikutnya dan status risiko.
+10. Backend menyimpan metadata model ke `forecast_run`, nilai per periode ke `forecast_result`, dan fold evaluasi ke `forecast_backtest`.
+11. Frontend menampilkan estimasi, freshness, rentang indikatif, dan status risiko.
 
 ## Model Forecasting
 
@@ -56,7 +66,7 @@ Worker menyediakan kandidat model:
 - Naive: prediksi sama dengan observasi terakhir.
 - SES: Single Exponential Smoothing dari `statsmodels`.
 - Damped Holt: Holt trend dengan `damped_trend=True`.
-- ARIMA sederhana: kandidat order terbatas `(1,0,0)`, `(0,1,1)`, `(1,1,0)`, dan `(1,1,1)`.
+- ARIMA sederhana: kandidat order terbatas `(1,0,0)`, `(0,1,1)`, dan `(1,1,0)`.
 
 Model dipilih berdasarkan MAE terkecil dari rolling-origin validation. Jika MAE sama atau sangat dekat, RMSE dipakai sebagai tie breaker. Nilai prediksi negatif diubah menjadi 0. Sistem tidak menerapkan batas bawah 1 dan tidak menerapkan batas atas berdasarkan dua kali nilai maksimum historis.
 
@@ -86,7 +96,8 @@ Backend Express:
 - `backend/services/monthlyInventoryImporter.js`: baca Excel bulanan, mapping produk, dry-run, upsert snapshot.
 - `backend/services/productNameMapper.js`: normalisasi nama produk.
 - `backend/services/inventoryHistoryQualityService.js`: kualitas histori bulanan.
-- `backend/services/inventoryForecastService.js`: integrasi backend ke worker dan penyimpanan `forecast_result`.
+- `backend/services/inventoryForecastService.js`: integrasi worker, batch forecasting, freshness, dan penyimpanan forecast run.
+- `backend/services/forecastActualEvaluationService.js`: evaluasi forecast terhadap snapshot aktual.
 - `backend/services/salesAggregationService.js`: baseline agregasi transaksi keluar ke `dataset_mingguan` dan `penjualan_bulanan`, tidak dipakai pipeline forecast inventory.
 
 Worker Flask:
@@ -109,7 +120,9 @@ Tabel baru yang mendukung pipeline:
 
 - `inventory_snapshot_monthly`: histori posisi persediaan akhir bulan.
 - `product_alias`: alias dan normalisasi nama produk untuk import.
-- `forecast_result`: hasil prediksi dan metrik evaluasi.
+- `forecast_run`: metadata satu proses forecast, kandidat model, metrik, dan freshness.
+- `forecast_result`: nilai prediksi per periode, rentang indikatif, dan realized error.
+- `forecast_backtest`: fold rolling-origin model terpilih.
 - `import_batch`: log proses import.
 - `penjualan_bulanan`: agregasi transaksi keluar aktual untuk data masa depan.
 
@@ -117,74 +130,27 @@ Tabel `dataset_mingguan` tidak dihapus. Tabel ini bukan sumber prediksi persedia
 
 ## Menjalankan Migration
 
-Backend memiliki migration runner Node.js yang membaca `DATABASE_URL` dari `backend/.env`, membuat tabel `schema_migrations`, menghitung checksum, dan menjalankan file `*.up.sql` di `backend/migrations` sesuai urutan nama timestamp.
+Repository memakai migration runner backend dan menjalankan file SQL berdasarkan urutan timestamp.
 
-Cek status migration:
-
-```bash
+```powershell
 cd backend
+npm run db:status
+npm run db:migrate
 npm run db:status
 ```
 
-Jalankan semua migration yang belum diterapkan:
+Migration tahap forecast run:
 
-```bash
-cd backend
-npm run db:migrate
+```text
+202607200002_refactor_forecast_runs
 ```
 
-Rollback migration terakhir yang sudah diterapkan:
+Rollback satu migration terakhir:
 
-```bash
-cd backend
+```powershell
 npm run db:rollback
 ```
 
-Periksa kesehatan dan integritas database:
-
-```bash
-cd backend
-npm run db:check
-```
-
-### Setup Database Lokal Windows PowerShell
-
-Script setup lokal mengorkestrasi urutan aman untuk database yang database dan user PostgreSQL-nya sudah dibuat manual. Script ini tidak membuat database, tidak membuat user PostgreSQL dengan superuser, dan akan menolak berjalan ketika `NODE_ENV=production`.
-
-Siapkan `backend/.env` terlebih dahulu dari contoh variabel yang tersedia, lalu isi nilainya di editor lokal tanpa menaruh credential ke source code:
-
-```powershell
-cd D:\Kode_Program_SACIKA\backend
-Copy-Item .env.example .env
-notepad .env
-```
-
-Jalankan mode aman terlebih dahulu. Mode ini menjalankan migration, seed, bootstrap produk dry-run, lalu `db:check`. Tanpa flag commit, script tidak mengubah master produk, histori inventory, atau stok saat ini.
-
-```powershell
-npm run db:setup-local -- --inventory-file "C:\Users\nicoe\Downloads\History Penjualan_LaporanBulanan.xlsx"
-```
-
-Setelah laporan dry-run sudah sesuai, jalankan ulang dengan flag eksplisit. Script akan meminta konfirmasi sebelum menjalankan operasi perubahan data besar.
-
-```powershell
-npm run db:setup-local -- `
-  --inventory-file "C:\Users\nicoe\Downloads\History Penjualan_LaporanBulanan.xlsx" `
-  --commit-products `
-  --import-inventory `
-  --sync-current-stock
-```
-
-Urutan yang dijalankan adalah koneksi PostgreSQL, `db:migrate`, `db:seed`, bootstrap produk dry-run, bootstrap produk commit bila diminta, import inventory bila diminta, sinkronisasi stok saat ini bila diminta, lalu `db:check`.
-
-Urutan migration saat ini:
-
-1. `202607170001_create_core_schema.up.sql`
-2. `202607180001_add_inventory_history_forecast.up.sql`
-3. `202607180002_add_forecast_result_unique_index.up.sql`
-4. `202607190001_add_penjualan_bulanan.up.sql`
-
-Runner menolak migration yang sudah pernah diterapkan jika isi file berubah dari checksum yang tersimpan. Runner juga memakai PostgreSQL advisory lock agar dua proses migration tidak berjalan bersamaan. File SQL dijalankan apa adanya sehingga migration lama yang sudah memiliki `BEGIN` dan `COMMIT` tetap kompatibel.
 ## Importer Excel
 
 Dry-run:
@@ -245,14 +211,6 @@ cd backend
 npm test
 ```
 
-Smoke test database memakai database pengujian terpisah dari `DATABASE_URL`. Test ini akan menolak berjalan jika `TEST_DATABASE_URL` kosong atau sama dengan `DATABASE_URL`, dan akan mereset schema `public` pada database test tersebut.
-
-```powershell
-cd backend
-$env:TEST_DATABASE_URL="postgresql://USER:PASSWORD@127.0.0.1:5432/sacika_test"
-npm run test:db
-```
-
 Worker:
 
 ```bash
@@ -284,7 +242,6 @@ Backend:
 | Variable | Keterangan | Default |
 | --- | --- | --- |
 | `DATABASE_URL` | Connection string PostgreSQL. | Wajib |
-| `TEST_DATABASE_URL` | Connection string PostgreSQL khusus smoke test database; wajib berbeda dari `DATABASE_URL`. | kosong |
 | `JWT_SECRET` | Secret JWT untuk autentikasi. | Wajib |
 | `PORT` | Port backend Express. | `3001` |
 | `FORECAST_WORKER_URL` | URL worker Flask untuk forecasting. | `http://localhost:5000` |
@@ -375,12 +332,17 @@ Response:
 
 ```json
 {
+  "forecast_run_id": 50,
   "product_id": 1,
   "target": "ending_inventory",
   "frequency": "monthly",
   "model_used": "SES",
   "forecast_periods": ["2026-01"],
   "forecast_values": [85],
+  "forecast_ranges": [
+    {"period": "2026-01", "lower_bound": 74.8, "upper_bound": 95.2}
+  ],
+  "freshness": "current",
   "evaluation": {
     "mae": 10.2,
     "rmse": 12.4,
@@ -422,9 +384,17 @@ Response:
 
 Mengambil hasil forecast terbaru yang tersimpan.
 
+### POST /api/forecast/inventory/batch
+
+Menjalankan forecast seluruh produk aktif dan eligible dengan concurrency terbatas.
+
+### POST /api/forecast/inventory/evaluate-actuals
+
+Membandingkan hasil forecast dengan snapshot aktual yang sudah tersedia.
+
 ### GET /api/forecast/inventory-risk
 
-Mengambil ringkasan risiko forecast terbaru.
+Mengambil ringkasan risiko forecast terbaru beserta freshness dan rentang indikatif.
 
 ```json
 [
@@ -440,11 +410,17 @@ Mengambil ringkasan risiko forecast terbaru.
 ]
 ```
 
-### GET /api/forecast/sales/:produk_id/readiness
+### API target monthly_sales
 
-Mengambil status kesiapan data untuk prediksi penjualan bulanan dari tabel
-`penjualan_bulanan`. Endpoint ini tidak menjalankan forecasting dan tidak
-diaktifkan di halaman utama.
+Target ini dibangun dari transaksi keluar aktual dan tidak menggunakan snapshot persediaan.
+
+```http
+GET  /api/forecast/sales/:produk_id/history
+GET  /api/forecast/sales/:produk_id/readiness
+POST /api/forecast/sales/:produk_id/preview
+```
+
+Endpoint preview hanya dapat dijalankan administrator, membutuhkan minimal 12 bulan lengkap, dan tetap bersifat eksperimental.
 
 Target ini terpisah dari persediaan:
 
@@ -493,6 +469,55 @@ Worker menerima deret waktu langsung dari request body. Worker tidak mengambil d
 - Histori produksi saat ini hanya mencakup maksimal 24 data bulanan.
 - Hasil forecast adalah estimasi posisi persediaan akhir bulan, bukan rekomendasi pembelian.
 - Faktor barang masuk dan barang keluar belum digunakan pada histori Excel lama.
-- Prediksi penjualan baru layak dibuat dari transaksi keluar aktual yang benar-benar tercatat di sistem.
+- Pratinjau target `monthly_sales` hanya dibangun dari transaksi keluar aktual yang benar-benar tercatat di sistem dan tetap bersifat eksperimental.
 - Produk yang belum dapat dipetakan dari Excel harus diselesaikan lewat alias/manual review.
 - Warning kualitas data tidak mengubah nilai prediksi.
+
+## Perbaikan keamanan dan stabilitas forecast 41–50
+
+Backend sekarang menggunakan Helmet, CORS berbasis environment, dan global
+error handler. Worker forecasting dilindungi shared API key. Konfigurasi baru:
+
+```env
+FORECAST_WORKER_API_KEY=
+FORECAST_MIN_IMPROVEMENT_OVER_NAIVE_PCT=5
+FORECAST_MAE_TIE_RELATIVE_TOLERANCE_PCT=1
+```
+
+`FORECAST_WORKER_API_KEY` harus sama pada backend dan worker. Panduan lengkap
+tersedia pada `README_PERBAIKAN_41-50.md`.
+
+## Perbaikan 51–60
+
+Perbaikan tahap ini menambahkan request limit, request logging dan request ID, soft delete produk/kategori, pagination produk/transaksi/laporan, serta endpoint ringkasan dashboard backend. Lihat `README_PERBAIKAN_51-60.md`.
+
+## Perbaikan 61–70
+
+Tahap ini menambahkan validasi numerik dan kategori yang lebih ketat, respons
+`409 Conflict`, database health check, setup database lokal, serta integration
+test PostgreSQL terpisah. Panduan lengkap tersedia pada
+`README_PERBAIKAN_61-70.md`.
+
+## Pengujian dan CI perbaikan 71–80
+
+Dokumentasi pengujian concurrency, contract backend–worker, Vitest, React Testing Library, MSW, dan GitHub Actions tersedia di [README_PERBAIKAN_71-80.md](README_PERBAIKAN_71-80.md).
+
+Perintah utama:
+
+```bash
+cd backend
+npm test
+npm run test:integration
+npm run test:db
+
+cd ../frontend
+npm install
+npm run test:all
+npm run lint
+npm run build
+```
+
+
+## Perbaikan 81–90
+
+Tahap ini menambahkan dokumentasi instalasi sampai deployment, endpoint agregasi bulanan baru, penandaan pipeline mingguan sebagai legacy, kontrak output tanpa jumlah pengadaan otomatis, metadata freshness/cutoff yang lebih jelas, serta pratinjau target `monthly_sales` dari transaksi keluar aktual. Panduan lengkap tersedia pada [README_PERBAIKAN_81-90.md](README_PERBAIKAN_81-90.md).

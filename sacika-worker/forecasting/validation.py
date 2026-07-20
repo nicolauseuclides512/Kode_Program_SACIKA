@@ -5,9 +5,10 @@ from .metrics import count_missing_observations, count_valid_observations, is_nu
 
 
 PERIOD_RE = re.compile(r"^(\d{4})-(\d{2})$")
-ALLOWED_TARGETS = {"ending_inventory"}
+ALLOWED_TARGETS = {"ending_inventory", "monthly_sales"}
 ALLOWED_FREQUENCIES = {"monthly"}
 DEFAULT_MIN_OBSERVATIONS = int(os.environ.get("FORECAST_MIN_OBSERVATIONS", "18"))
+DEFAULT_MIN_SALES_OBSERVATIONS = int(os.environ.get("FORECAST_MIN_SALES_OBSERVATIONS", "12"))
 MAX_FORECAST_HORIZON = int(os.environ.get("FORECAST_MAX_HORIZON", "3"))
 
 
@@ -75,7 +76,7 @@ def validate_values(values):
     return normalized, errors
 
 
-def validate_prediction_payload(payload, min_observations=DEFAULT_MIN_OBSERVATIONS):
+def validate_prediction_payload(payload, min_observations=None):
     errors = []
 
     if not isinstance(payload, dict):
@@ -87,7 +88,15 @@ def validate_prediction_payload(payload, min_observations=DEFAULT_MIN_OBSERVATIO
 
     target = payload.get("target")
     if target not in ALLOWED_TARGETS:
-        errors.append("target harus bernilai ending_inventory")
+        errors.append("target harus bernilai ending_inventory atau monthly_sales")
+
+    required_observations = min_observations
+    if required_observations is None:
+        required_observations = (
+            DEFAULT_MIN_SALES_OBSERVATIONS
+            if target == "monthly_sales"
+            else DEFAULT_MIN_OBSERVATIONS
+        )
 
     frequency = payload.get("frequency")
     if frequency not in ALLOWED_FREQUENCIES:
@@ -113,9 +122,9 @@ def validate_prediction_payload(payload, min_observations=DEFAULT_MIN_OBSERVATIO
             errors.extend(value_errors)
 
             observation_count = count_valid_observations(normalized_values)
-            if observation_count < min_observations:
+            if observation_count < required_observations:
                 errors.append(
-                    f"observasi valid minimal {min_observations}, saat ini {observation_count}"
+                    f"observasi valid minimal {required_observations}, saat ini {observation_count}"
                 )
     else:
         normalized_values = []

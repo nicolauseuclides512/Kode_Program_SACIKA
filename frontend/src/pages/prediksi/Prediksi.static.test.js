@@ -31,11 +31,11 @@ test("Prediksi page exposes success metrics, warning, and failure states", () =>
 
 test("Prediksi page does not show purchase recommendation calculations", () => {
   assert.doesNotMatch(source, /stok_dibutuhkan|stokDibutuhkan|jumlah.*dibeli|harus dibeli/i);
-  assert.doesNotMatch(source, /rekomendasi pengadaan|pengadaan otomatis/i);
+  assert.doesNotMatch(source, /rekomendasi pengadaan|jumlah pengadaan yang disarankan/i);
   assert.doesNotMatch(source, /1 Minggu|4 Minggu|12 Minggu|Proyeksi ARIMA|Kebutuhan Stok|Prediksi Permintaan Penjualan/);
   assert.match(source, /Prediksi persediaan berada di bawah batas minimum/);
   assert.match(source, /Prediksi persediaan masih berada di atas batas minimum/);
-  assert.match(source, /bukan prediksi penjualan atau rekomendasi jumlah pembelian/);
+  assert.match(source, /tidak menghitung permintaan atau jumlah pengadaan otomatis/);
 });
 
 

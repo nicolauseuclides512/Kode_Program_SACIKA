@@ -21,10 +21,12 @@ const kategoriRoutes = require("./routes/kategoriRoutes");
 const produkRoutes = require("./routes/produkRoutes");
 const transaksiRoutes = require("./routes/transaksiRoutes");
 const datasetRoutes = require("./routes/datasetRoutes");
+const salesAggregationRoutes = require("./routes/salesAggregationRoutes");
 const laporanRoutes = require("./routes/laporanRoutes");
 const dashboardRoutes = require("./routes/dashboardRoutes");
 const inventoryHistoryRoutes = require("./routes/inventoryHistoryRoutes");
 const forecastRoutes = require("./routes/forecastRoutes");
+const salesForecastRoutes = require("./routes/salesForecastRoutes");
 
 
 function getAllowedOrigins() {
@@ -75,9 +77,11 @@ function createApp(options = {}) {
   app.use("/api/produk", produkRoutes);
   app.use("/api/transaksi", transaksiRoutes);
   app.use("/api/dataset", datasetRoutes);
+  app.use("/api/sales", salesAggregationRoutes);
   app.use("/api/laporan", laporanRoutes);
   app.use("/api/dashboard", dashboardRoutes);
   app.use("/api/inventory-history", inventoryHistoryRoutes);
+  app.use("/api/forecast/sales", salesForecastRoutes);
   app.use("/api/forecast", forecastRoutes);
 
   app.get("/", (req, res) => {

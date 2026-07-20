@@ -1,8 +1,8 @@
 # Inventory Forecast API
 
 Forecast inventory memprediksi posisi persediaan akhir bulan. Hasilnya bukan
-prediksi penjualan, bukan prediksi permintaan, dan bukan rekomendasi jumlah
-pembelian.
+target transaksi keluar, bukan estimasi permintaan, dan tidak menghitung jumlah
+pengadaan otomatis.
 
 ## Struktur penyimpanan
 
@@ -154,7 +154,7 @@ untuk periode snapshot tersebut.
 ## GET /api/forecast/sales/:produk_id/readiness
 
 Mengambil status kesiapan target `monthly_sales`. Sumbernya hanya
-`penjualan_bulanan` dari transaksi keluar aktual. Target ini tetap terpisah dari
+`monthly_sales` dari transaksi keluar aktual. Target ini tetap terpisah dari
 `ending_inventory`.
 
 ## Model dan evaluasi

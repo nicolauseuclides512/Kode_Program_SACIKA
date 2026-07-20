@@ -517,7 +517,7 @@ const Prediksi = () => {
             <Info className="w-4 h-4 mt-0.5 shrink-0 text-zinc-500" />
             <div className="space-y-2">
               <p>
-                Hasil ini merupakan estimasi posisi persediaan akhir bulan, bukan prediksi penjualan atau rekomendasi jumlah pembelian.
+                Hasil ini hanya mengestimasi posisi persediaan akhir bulan. Sistem tidak menghitung permintaan atau jumlah pengadaan otomatis.
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 <span className={`inline-flex text-[10px] font-bold px-2 py-0.5 rounded-md border ${freshnessCopy.className}`}>
@@ -559,6 +559,12 @@ const Prediksi = () => {
                 </p>
                 <p className="text-xs text-zinc-400">
                   Periode cutoff data: {forecastResult.data_cutoff || historyCutoff}
+                </p>
+                <p className="text-[11px] text-zinc-400">
+                  Snapshot terbaru: {forecastResult.freshness_details?.latest_snapshot_period || forecastResult.data_cutoff || historyCutoff}
+                  {Number(forecastResult.freshness_details?.stale_by_months || 0) > 0
+                    ? ` • tertinggal ${forecastResult.freshness_details.stale_by_months} bulan`
+                    : " • sesuai histori terbaru"}
                 </p>
               </div>
             </Card>

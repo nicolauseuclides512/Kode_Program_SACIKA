@@ -117,6 +117,29 @@ function formatMonth(value) {
   return String(value).slice(0, 7);
 }
 
+function monthIndex(value) {
+  const month = formatMonth(value);
+  if (!month || !/^\d{4}-\d{2}$/.test(month)) return null;
+  const [year, number] = month.split("-").map(Number);
+  return (year * 12) + number - 1;
+}
+
+function monthsBetween(earlier, later) {
+  const first = monthIndex(earlier);
+  const second = monthIndex(later);
+  if (first === null || second === null) return null;
+  return Math.max(0, second - first);
+}
+
+function inventoryUsageNotice() {
+  return {
+    interpretation: "ending_inventory_estimate",
+    decision_support_only: true,
+    procurement_recommendation: false,
+    message: "Hasil hanya mengestimasi posisi persediaan akhir bulan dan tidak menghitung jumlah pengadaan otomatis.",
+  };
+}
+
 function toNumberOrNull(value) {
   if (value === undefined || value === null || value === "") return null;
   const parsed = Number(value);
@@ -522,11 +545,12 @@ async function refreshForecastFreshness(db, produkIdInput = null) {
       FROM latest_snapshot snapshot
       WHERE run.produk_id = snapshot.produk_id
         AND run.status = 'current'
+        AND run.target = $2
         AND run.data_cutoff < snapshot.latest_period
         AND ($1::integer IS NULL OR run.produk_id=$1)
       RETURNING run.id, run.produk_id, run.target, run.data_cutoff, snapshot.latest_period
     `,
-    [produkId],
+    [produkId, TARGET],
   );
 
   return result.rows;
@@ -575,6 +599,12 @@ async function runInventoryForecast(db, produkIdInput, options = {}) {
     freshness: saved.status,
     forecast_result_ids: saved.forecast_result_ids,
     forecast_ranges: saved.forecast_ranges,
+    usage_notice: inventoryUsageNotice(),
+    freshness_details: {
+      data_cutoff: saved.data_cutoff,
+      latest_snapshot_period: saved.data_cutoff,
+      stale_by_months: 0,
+    },
     quality: {
       observation_count: quality.observation_count,
       latest_contiguous_observation_count: quality.latest_contiguous_observation_count,
@@ -685,6 +715,12 @@ function buildLatestForecastResponse(product, run, rows, backtestRows = []) {
     model_used: run.model_used,
     data_cutoff: formatMonth(run.data_cutoff),
     freshness: run.status,
+    freshness_details: {
+      data_cutoff: formatMonth(run.data_cutoff),
+      latest_snapshot_period: formatMonth(product.latest_snapshot_period) || formatMonth(run.data_cutoff),
+      stale_by_months: monthsBetween(run.data_cutoff, product.latest_snapshot_period || run.data_cutoff),
+    },
+    usage_notice: inventoryUsageNotice(),
     forecast_periods: rows.map((row) => formatMonth(row.forecast_period)),
     forecast_values: rows.map((row) => toNumberOrNull(row.forecast_value)),
     forecast_ranges: rows.map((row) => ({
@@ -740,8 +776,11 @@ function buildInventoryRiskRows(rows = []) {
     risk: getRiskLevel(row.forecast_value, row.stok_minimum),
     model_used: row.model_used,
     data_cutoff: formatMonth(row.data_cutoff),
+    latest_snapshot_period: formatMonth(row.latest_snapshot_period) || formatMonth(row.data_cutoff),
+    stale_by_months: monthsBetween(row.data_cutoff, row.latest_snapshot_period || row.data_cutoff),
     freshness: row.status,
     created_at: row.created_at,
+    usage_notice: inventoryUsageNotice(),
   }));
 }
 
@@ -749,7 +788,13 @@ async function getInventoryRiskSummary(db) {
   await refreshForecastFreshness(db);
   const result = await db.query(
     `
-      WITH latest_run AS (
+      WITH latest_snapshot AS (
+        SELECT produk_id, MAX(periode) AS latest_period
+        FROM inventory_snapshot_monthly
+        WHERE status_data IN ('observed', 'corrected')
+        GROUP BY produk_id
+      ),
+      latest_run AS (
         SELECT DISTINCT ON (run.produk_id)
           run.*
         FROM forecast_run run
@@ -775,10 +820,12 @@ async function getInventoryRiskSummary(db) {
           run.model_used,
           run.data_cutoff,
           run.status,
-          run.created_at
+          run.created_at,
+          snapshot.latest_period AS latest_snapshot_period
         FROM latest_run run
         JOIN forecast_result result ON result.forecast_run_id=run.id
         JOIN produk p ON p.id=run.produk_id
+        LEFT JOIN latest_snapshot snapshot ON snapshot.produk_id=run.produk_id
         WHERE result.forecast_period > run.data_cutoff
           AND p.deleted_at IS NULL
           AND p.is_active=TRUE
@@ -803,7 +850,14 @@ async function getLatestInventoryForecast(db, produkIdInput) {
   await refreshForecastFreshness(db, produkId);
 
   const productResult = await db.query(
-    "SELECT id, nama_produk, stok, stok_minimum FROM produk WHERE id=$1 AND deleted_at IS NULL",
+    `
+      SELECT p.id, p.nama_produk, p.stok, p.stok_minimum,
+             (SELECT MAX(s.periode)
+              FROM inventory_snapshot_monthly s
+              WHERE s.produk_id=p.id AND s.status_data IN ('observed','corrected')) AS latest_snapshot_period
+      FROM produk p
+      WHERE p.id=$1 AND p.deleted_at IS NULL
+    `,
     [produkId],
   );
   if (productResult.rows.length === 0) {
@@ -865,6 +919,8 @@ module.exports = {
   buildWorkerPayload,
   calculateIndicativeRange,
   callForecastWorker,
+  inventoryUsageNotice,
+  monthsBetween,
   getInventoryRiskSummary,
   getLatestInventoryForecast,
   getRiskLevel,

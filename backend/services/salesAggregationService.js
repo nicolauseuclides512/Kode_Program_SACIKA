@@ -294,6 +294,42 @@ async function refreshSalesAggregationForChanges(client, changes = []) {
   };
 }
 
+async function runMonthlySalesAggregation(db) {
+  const client = await db.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const transactionResult = await client.query(
+      `
+        SELECT produk_id, tanggal, jumlah
+        FROM transaksi
+        WHERE jenis_transaksi = 'keluar'
+        ORDER BY produk_id, tanggal, id
+      `,
+    );
+
+    const monthlyRows = aggregateMonthlySalesRows(transactionResult.rows);
+    await client.query("DELETE FROM penjualan_bulanan");
+    await insertMonthlyRows(client, monthlyRows);
+    await client.query("COMMIT");
+
+    return {
+      message: "Agregasi transaksi keluar bulanan selesai",
+      target: "monthly_sales",
+      source: "actual_outgoing_transactions",
+      source_transactions: transactionResult.rows.length,
+      monthly_records: monthlyRows.length,
+      legacy_weekly_updated: false,
+    };
+  } catch (error) {
+    await rollbackQuietly(client);
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 async function runSalesAggregation(db) {
   const client = await db.connect();
 
@@ -342,5 +378,6 @@ module.exports = {
   normalizeAffectedSalesPeriods,
   parseDateParts,
   refreshSalesAggregationForChanges,
+  runMonthlySalesAggregation,
   runSalesAggregation,
 };

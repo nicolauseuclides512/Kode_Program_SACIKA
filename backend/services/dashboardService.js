@@ -132,6 +132,8 @@ async function getDashboardSummary(db, periodInput) {
   const outgoing = number(flow.outgoing_quantity);
   const highRisks = risks.filter((item) => item.risk === "high");
   const staleRisks = risks.filter((item) => item.freshness === "stale");
+  const currentRisks = risks.filter((item) => item.freshness === "current");
+  const cutoffs = risks.map((item) => item.data_cutoff).filter(Boolean).sort();
 
   return {
     period: bounds.period,
@@ -173,7 +175,10 @@ async function getDashboardSummary(db, periodInput) {
     forecast_risk: {
       available_count: risks.length,
       high_count: highRisks.length,
+      current_count: currentRisks.length,
       stale_count: staleRisks.length,
+      oldest_data_cutoff: cutoffs[0] || null,
+      newest_data_cutoff: cutoffs[cutoffs.length - 1] || null,
       items: highRisks.slice(0, 6),
     },
   };

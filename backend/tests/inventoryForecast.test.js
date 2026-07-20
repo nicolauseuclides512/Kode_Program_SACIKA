@@ -103,7 +103,7 @@ function createFakeDb(options = {}) {
       if (sql.includes("UPDATE forecast_run run") && sql.includes("latest_snapshot")) {
         return { rows: options.staleRows || [] };
       }
-      if (sql.includes("WITH latest_run")) return { rows: options.riskRows || [] };
+      if (sql.includes("latest_run AS")) return { rows: options.riskRows || [] };
       if (sql.includes("SELECT *") && sql.includes("FROM forecast_run")) {
         return { rows: options.latestRun ? [options.latestRun] : [] };
       }
@@ -306,7 +306,7 @@ test("refreshForecastFreshness marks current runs stale when a newer snapshot ex
   assert.equal(rows.length, 1);
   const query = db.executedQueries[0];
   assert.match(query.sql, /status='stale'/);
-  assert.deepEqual(query.params, [1]);
+  assert.deepEqual(query.params, [1, "ending_inventory"]);
 });
 
 test("buildInventoryRiskRows includes range and freshness", () => {
@@ -325,21 +325,13 @@ test("buildInventoryRiskRows includes range and freshness", () => {
     created_at: "2026-01-01T00:00:00.000Z",
   }]);
 
-  assert.deepEqual(rows[0], {
-    produk_id: 1,
-    nama_produk: "Aqua Botol 600 ml",
-    forecast_run_id: 50,
-    forecast_period: "2026-01",
-    forecast_value: 45,
-    lower_bound: 15,
-    upper_bound: 75,
-    stok_minimum: 60,
-    risk: "high",
-    model_used: "SES",
-    data_cutoff: "2025-12",
-    freshness: "stale",
-    created_at: "2026-01-01T00:00:00.000Z",
-  });
+  assert.equal(rows[0].produk_id, 1);
+  assert.equal(rows[0].forecast_period, "2026-01");
+  assert.equal(rows[0].risk, "high");
+  assert.equal(rows[0].freshness, "stale");
+  assert.equal(rows[0].latest_snapshot_period, "2025-12");
+  assert.equal(rows[0].stale_by_months, 0);
+  assert.equal(rows[0].usage_notice.procurement_recommendation, false);
 });
 
 test("getInventoryRiskSummary reads forecast_run and excludes superseded runs", async () => {

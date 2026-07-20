@@ -10,10 +10,6 @@ const inventoryForecastController = createInventoryForecastController();
 router.use(verifyToken, allowRoles("admin", "staff"));
 
 router.get("/inventory-risk", inventoryForecastController.getInventoryRiskSummary);
-router.get(
-  "/sales/:produk_id/readiness",
-  inventoryForecastController.getSalesForecastReadiness,
-);
 router.post(
   "/inventory/batch",
   allowRoles("admin"),

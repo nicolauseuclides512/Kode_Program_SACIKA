@@ -15,6 +15,8 @@ from .validation import validate_prediction_payload
 DEFAULT_MAE_TIE_RELATIVE_TOLERANCE_PCT = 1.0
 DEFAULT_MIN_IMPROVEMENT_OVER_NAIVE_PCT = 5.0
 HIGH_ZERO_RATIO_THRESHOLD = 0.5
+INVENTORY_ROLLING_MIN_TRAINING = 18
+SALES_ROLLING_MIN_TRAINING = int(os.environ.get("FORECAST_SALES_ROLLING_MIN_TRAINING", "6"))
 MODEL_COMPLEXITY_RANK = {
     "Naive": 0,
     "SES": 1,
@@ -158,8 +160,8 @@ def _is_better_candidate(candidate, current_best, relative_tolerance_pct=None):
     return candidate_mae < best_mae
 
 
-def _evaluate_model(display_name, model_func, values, metadata=None):
-    evaluation = rolling_origin_validation(values, model_func)
+def _evaluate_model(display_name, model_func, values, metadata=None, minimum_training=18):
+    evaluation = rolling_origin_validation(values, model_func, minimum_training=minimum_training)
     return {
         "display_name": display_name,
         "forecast_func": model_func,
@@ -169,13 +171,13 @@ def _evaluate_model(display_name, model_func, values, metadata=None):
     }
 
 
-def _evaluate_arima(values):
+def _evaluate_arima(values, minimum_training=18):
     best_arima = None
     order_summaries = []
 
     for order in ALLOWED_ARIMA_ORDERS:
         model_func = partial(arima_forecast, order=order)
-        evaluation = rolling_origin_validation(values, model_func)
+        evaluation = rolling_origin_validation(values, model_func, minimum_training=minimum_training)
         candidate = {
             "display_name": "ARIMA",
             "forecast_func": model_func,
@@ -319,12 +321,12 @@ def _apply_naive_guard(candidates, best_overall):
     }
 
 
-def evaluate_candidate_models(values):
+def evaluate_candidate_models(values, minimum_training=INVENTORY_ROLLING_MIN_TRAINING):
     candidates = [
-        _evaluate_model("Naive", naive_forecast, values),
-        _evaluate_model("SES", single_exponential_smoothing_forecast, values),
-        _evaluate_model("Damped Holt", damped_holt_forecast, values),
-        _evaluate_arima(values),
+        _evaluate_model("Naive", naive_forecast, values, minimum_training=minimum_training),
+        _evaluate_model("SES", single_exponential_smoothing_forecast, values, minimum_training=minimum_training),
+        _evaluate_model("Damped Holt", damped_holt_forecast, values, minimum_training=minimum_training),
+        _evaluate_arima(values, minimum_training=minimum_training),
     ]
 
     best_overall = None
@@ -420,7 +422,14 @@ def handle_prediction_request(payload):
         validated_payload["values"],
     )
 
-    best_candidate, candidate_summaries, selection = evaluate_candidate_models(valid_values)
+    minimum_training = (
+        SALES_ROLLING_MIN_TRAINING
+        if validated_payload["target"] == "monthly_sales"
+        else INVENTORY_ROLLING_MIN_TRAINING
+    )
+    best_candidate, candidate_summaries, selection = evaluate_candidate_models(
+        valid_values, minimum_training=minimum_training
+    )
     forecast_result = best_candidate["forecast_func"](
         valid_values,
         validated_payload["horizon"],

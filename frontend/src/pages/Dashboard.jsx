@@ -43,7 +43,10 @@ const EMPTY_SUMMARY = {
   weekly: [1, 2, 3, 4].map((week) => ({ week, incoming_quantity: 0, outgoing_quantity: 0 })),
   recent_transactions: [],
   critical_products: [],
-  forecast_risk: { available_count: 0, high_count: 0, stale_count: 0, items: [] },
+  forecast_risk: {
+    available_count: 0, high_count: 0, current_count: 0, stale_count: 0,
+    oldest_data_cutoff: null, newest_data_cutoff: null, items: [],
+  },
 };
 
 const Dashboard = () => {
@@ -120,6 +123,11 @@ const Dashboard = () => {
         <div>
           <h2 className="text-3xl font-bold tracking-tight text-zinc-900">Dashboard</h2>
           <p className="text-sm text-zinc-500 mt-1">Ringkasan operasional dihitung langsung oleh backend.</p>
+          {summary.generated_at && (
+            <p className="text-[10px] text-zinc-400 mt-1">
+              Data dashboard dibuat: {new Date(summary.generated_at).toLocaleString("id-ID")}
+            </p>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-3">
           <div className="w-[140px]">
@@ -168,12 +176,19 @@ const Dashboard = () => {
               <p className="text-xs text-zinc-500">
                 Terdapat <strong>{risk.high_count} produk</strong> berisiko tinggi.
                 {risk.stale_count > 0 && <> <strong>{risk.stale_count} hasil</strong> kedaluwarsa.</>}
+                {risk.newest_data_cutoff && <> Cutoff terbaru: <strong>{risk.newest_data_cutoff}</strong>.</>}
               </p>
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {risk.items.map((item) => (
                   <div key={`${item.produk_id}-${item.forecast_period}`} className="rounded-lg border bg-white px-3 py-2">
                     <p className="text-xs font-semibold truncate">{item.nama_produk}</p>
-                    <p className="text-[10px] text-zinc-400 mt-1">{item.forecast_period} | {item.model_used} | {item.freshness === "stale" ? "Kedaluwarsa" : "Aktif"}</p>
+                    <p className="text-[10px] text-zinc-400 mt-1">
+                      {item.forecast_period} | {item.model_used} | {item.freshness === "stale" ? "Kedaluwarsa" : "Aktif"}
+                    </p>
+                    <p className="text-[10px] text-zinc-400 mt-1">
+                      Cutoff: {item.data_cutoff || "-"} | Snapshot terbaru: {item.latest_snapshot_period || item.data_cutoff || "-"}
+                      {Number(item.stale_by_months || 0) > 0 && ` | Tertinggal ${item.stale_by_months} bulan`}
+                    </p>
                     <p className="text-[11px] text-zinc-600 mt-1">Prediksi: <strong>{formatUnit(item.forecast_value)} unit</strong> / Minimum: <strong>{formatUnit(item.stok_minimum)} unit</strong></p>
                     {item.lower_bound !== null && item.upper_bound !== null && (
                       <p className="text-[10px] text-zinc-400 mt-1">Rentang indikatif: {formatUnit(item.lower_bound)}–{formatUnit(item.upper_bound)} unit</p>

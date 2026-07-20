@@ -1,4 +1,8 @@
 const { FORECAST_TARGETS } = require("./forecastTargets");
+const {
+  MonthlySalesHistoryError,
+  getMonthlySalesHistory,
+} = require("./monthlySalesHistoryService");
 
 class SalesForecastReadinessError extends Error {
   constructor(statusCode, message, details = null) {
@@ -8,86 +12,44 @@ class SalesForecastReadinessError extends Error {
   }
 }
 
-function parseProdukId(value) {
-  const produkId = Number(value);
-  if (!produkId || Number.isNaN(produkId) || produkId <= 0) {
-    throw new SalesForecastReadinessError(400, "produk_id harus angka valid");
-  }
-
-  return produkId;
-}
-
 function classifyMonthlySalesReadiness(observationCount) {
   const count = Number(observationCount) || 0;
-
-  if (count < 6) {
-    return {
-      status: "insufficient_data",
-      message: "Prediksi penjualan belum diaktifkan karena histori belum mencukupi.",
-    };
-  }
-
-  if (count < 12) {
-    return {
-      status: "experimental",
-      message: "Prediksi penjualan belum diaktifkan karena histori belum mencukupi.",
-    };
-  }
-
-  if (count < 24) {
-    return {
-      status: "eligible_basic",
-      message: "Histori penjualan cukup untuk evaluasi dasar, tetapi prediksi penjualan belum diaktifkan untuk pengguna.",
-    };
-  }
-
-  return {
-    status: "eligible_full",
-    message: "Histori penjualan cukup untuk evaluasi penuh, tetapi prediksi penjualan belum diaktifkan untuk pengguna.",
-  };
+  if (count < 6) return { status: "insufficient_data", message: "Histori transaksi keluar bulanan belum mencukupi." };
+  if (count < 12) return { status: "experimental", message: "Histori tersedia untuk eksplorasi, tetapi belum cukup untuk pratinjau model." };
+  if (count < 24) return { status: "eligible_basic", message: "Histori cukup untuk pratinjau forecasting dasar oleh administrator." };
+  return { status: "eligible_full", message: "Histori cukup untuk evaluasi forecasting yang lebih lengkap." };
 }
 
-function buildMonthlySalesReadinessResponse(observationCount) {
+function buildMonthlySalesReadinessResponse(observationCount, details = {}) {
   const readiness = classifyMonthlySalesReadiness(observationCount);
-
   return {
     target: FORECAST_TARGETS.MONTHLY_SALES,
+    source: "actual_outgoing_transactions",
     observation_count: Number(observationCount) || 0,
+    minimum_preview_observations: 12,
     status: readiness.status,
+    preview_enabled: Number(observationCount) >= 12,
     message: readiness.message,
+    ...details,
   };
 }
 
-async function getMonthlySalesForecastReadiness(db, produkIdInput) {
-  const produkId = parseProdukId(produkIdInput);
-
-  const productResult = await db.query(
-    `
-      SELECT id
-      FROM produk
-      WHERE id=$1
-    `,
-    [produkId],
-  );
-
-  if (productResult.rows.length === 0) {
-    throw new SalesForecastReadinessError(404, "Produk tidak ditemukan");
+async function getMonthlySalesForecastReadiness(db, produkIdInput, options = {}) {
+  try {
+    const history = await getMonthlySalesHistory(db, produkIdInput, options);
+    return buildMonthlySalesReadinessResponse(history.observation_count, {
+      period_start: history.period_start || null,
+      period_end: history.period_end || null,
+      complete_through: history.complete_through || null,
+      zero_month_count: history.zero_month_count || 0,
+      history_status: history.status,
+    });
+  } catch (error) {
+    if (error instanceof MonthlySalesHistoryError) {
+      throw new SalesForecastReadinessError(error.statusCode, error.message, error.details);
+    }
+    throw error;
   }
-
-  const salesHistoryResult = await db.query(
-    `
-      SELECT COUNT(*)::int AS observation_count
-      FROM penjualan_bulanan
-      WHERE produk_id=$1
-        AND total_penjualan IS NOT NULL
-        AND total_penjualan >= 0
-    `,
-    [produkId],
-  );
-
-  return buildMonthlySalesReadinessResponse(
-    salesHistoryResult.rows[0]?.observation_count || 0,
-  );
 }
 
 module.exports = {
