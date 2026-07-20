@@ -109,7 +109,7 @@ const TransaksiMasuk = () => {
       await fetchTransaksi();
       await fetchProduk();
       setToast({ message: "Transaksi masuk berhasil dicatat!", type: "success" });
-    } catch (err) {
+    } catch {
       setToast({ message: "Gagal mencatat transaksi masuk.", type: "error" });
     } finally {
       setLoading(false);
@@ -145,7 +145,7 @@ const TransaksiMasuk = () => {
       await fetchTransaksi();
       await fetchProduk();
       setToast({ message: "Transaksi masuk berhasil diperbarui!", type: "success" });
-    } catch (err) {
+    } catch {
       setToast({ message: "Gagal memperbarui transaksi masuk.", type: "error" });
     } finally {
       setLoading(false);
@@ -166,7 +166,7 @@ const TransaksiMasuk = () => {
       await fetchTransaksi();
       await fetchProduk();
       setToast({ message: "Transaksi masuk berhasil dihapus dan stok disesuaikan!", type: "success" });
-    } catch (err) {
+    } catch {
       setToast({ message: "Gagal menghapus transaksi masuk.", type: "error" });
     } finally {
       setLoading(false);

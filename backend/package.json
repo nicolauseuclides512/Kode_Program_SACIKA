@@ -19,7 +19,8 @@
     "snapshot:monthly": "node scripts/createMonthlySnapshot.js",
     "sync:current-stock": "node scripts/syncCurrentStockFromSnapshots.js",
     "forecast:eligible-products": "node scripts/runEligibleInventoryForecasts.js",
-    "forecast:evaluate-actuals": "node scripts/evaluateForecastsAgainstActuals.js"
+    "forecast:evaluate-actuals": "node scripts/evaluateForecastsAgainstActuals.js",
+    "test:integration": "node scripts/runTests.js integration"
   },
   "keywords": [],
   "author": "",

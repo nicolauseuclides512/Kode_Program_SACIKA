@@ -6,7 +6,12 @@ const { spawnSync } = require("node:child_process");
 
 function listTestFiles(scope) {
   const testsRoot = path.resolve(__dirname, "../tests");
-  const target = scope === "database" ? path.join(testsRoot, "database") : testsRoot;
+  const scopeDirectories = {
+    unit: testsRoot,
+    database: path.join(testsRoot, "database"),
+    integration: path.join(testsRoot, "integration"),
+  };
+  const target = scopeDirectories[scope];
 
   if (!fs.existsSync(target)) return [];
 
@@ -18,8 +23,8 @@ function listTestFiles(scope) {
 
 function main() {
   const scope = process.argv[2] || "unit";
-  if (!["unit", "database"].includes(scope)) {
-    throw new Error("Scope test harus unit atau database.");
+  if (!["unit", "database", "integration"].includes(scope)) {
+    throw new Error("Scope test harus unit, database, atau integration.");
   }
 
   const files = listTestFiles(scope);

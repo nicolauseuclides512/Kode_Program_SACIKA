@@ -1,6 +1,5 @@
 import * as React from "react"
 import * as SidebarPrimitive from "@radix-ui/react-sidebar"
-import { cn } from "@/lib/utils"
 
 const Sidebar = SidebarPrimitive.Root
 

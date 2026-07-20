@@ -21,6 +21,7 @@ export function SearchableSelect({
     function handleClickOutside(event) {
       if (containerRef.current && !containerRef.current.contains(event.target)) {
         setIsOpen(false);
+        setSearchQuery("");
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
@@ -33,8 +34,6 @@ export function SearchableSelect({
       setTimeout(() => {
         searchInputRef.current.focus();
       }, 50);
-    } else {
-      setSearchQuery("");
     }
   }, [isOpen]);
 
@@ -43,6 +42,7 @@ export function SearchableSelect({
     function handleKeyDown(event) {
       if (event.key === "Escape") {
         setIsOpen(false);
+        setSearchQuery("");
       }
     }
     if (isOpen) {
@@ -64,6 +64,7 @@ export function SearchableSelect({
   const handleSelect = (val) => {
     onValueChange(val);
     setIsOpen(false);
+    setSearchQuery("");
   };
 
   const handleClear = (e) => {
@@ -77,7 +78,11 @@ export function SearchableSelect({
       <button
         type="button"
         disabled={disabled}
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={() => {
+          const nextOpen = !isOpen;
+          setIsOpen(nextOpen);
+          if (!nextOpen) setSearchQuery("");
+        }}
         className={cn(
           "flex h-9 w-full items-center justify-between rounded-lg border border-zinc-200 bg-white px-3 py-2 text-sm shadow-2xs transition-all hover:bg-zinc-50 focus:outline-none focus:ring-1 focus:ring-zinc-950 disabled:cursor-not-allowed disabled:opacity-50 text-left",
           !selectedOption && "text-zinc-400"

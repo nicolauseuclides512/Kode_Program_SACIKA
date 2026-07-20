@@ -191,7 +191,7 @@ const TransaksiKeluar = () => {
       await fetchTransaksi();
       await fetchProduk();
       setToast({ message: "Transaksi keluar berhasil dihapus dan stok disesuaikan!", type: "success" });
-    } catch (err) {
+    } catch {
       setToast({ message: "Gagal menghapus transaksi keluar.", type: "error" });
     } finally {
       setLoading(false);

@@ -30,7 +30,7 @@ const Login = () => {
 
       login(res.data);
       navigate("/dashboard");
-    } catch (err) {
+    } catch {
       setError("Username atau password salah");
     } finally {
       setLoading(false);

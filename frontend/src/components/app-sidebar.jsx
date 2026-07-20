@@ -1,6 +1,6 @@
 import * as React from "react"
 import { useContext } from "react"
-import { NavLink, useNavigate } from "react-router-dom"
+import { NavLink } from "react-router-dom"
 import AuthContext from "../auth/AuthContext"
 import { 
   LayoutDashboard, 
@@ -77,7 +77,6 @@ const data = {
 }
 
 export function AppSidebar({ ...props }) {
-  const navigate = useNavigate();
   const { logout } = useContext(AuthContext);
   const username = localStorage.getItem("username") || "admin";
 

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { createElement, useEffect, useMemo, useState } from "react";
 import api from "../api/axios";
 import { ENDPOINTS } from "../api/endpoints";
 import { Card, CardHeader, CardTitle, CardContent, CardDescription } from "../components/ui/card";
@@ -251,11 +251,11 @@ const Dashboard = () => {
   );
 };
 
-function MetricCard({ title, value, icon: Icon, note, trend }) {
+function MetricCard({ title, value, icon, note, trend }) {
   const numericTrend = trend && !trend.includes("N/A") ? Number(trend.replace("%", "")) : 0;
   return (
     <Card className="rounded-xl border border-zinc-200 shadow-sm">
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-xs font-semibold text-zinc-500 uppercase">{title}</CardTitle><Icon className="h-4 w-4 text-zinc-400" /></CardHeader>
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-xs font-semibold text-zinc-500 uppercase">{title}</CardTitle>{createElement(icon, { className: "h-4 w-4 text-zinc-400" })}</CardHeader>
       <CardContent><div className="text-3xl font-bold">{value}</div>{trend ? <span className="text-[11px] flex items-center mt-1 text-zinc-500">{numericTrend >= 0 ? <ArrowUpRight className="h-3 w-3 mr-1" /> : <TrendingDown className="h-3 w-3 mr-1" />}{trend} dibanding bulan lalu</span> : <p className="text-[11px] text-zinc-400 mt-1">{note}</p>}</CardContent>
     </Card>
   );

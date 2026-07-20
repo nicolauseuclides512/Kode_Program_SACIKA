@@ -50,25 +50,7 @@ const Report = () => {
 
   const [toast, setToast] = useState(null);
 
-  useEffect(() => {
-    fetchKategori();
-  }, []);
-
-  useEffect(() => {
-    const timer = setTimeout(() => fetchReport(), 250);
-    return () => clearTimeout(timer);
-  }, [pagination.page, pagination.limit, search]);
-
-  const fetchKategori = async () => {
-    try {
-      const res = await api.get(ENDPOINTS.kategori);
-      setKategori(res.data);
-    } catch (err) {
-      console.error(err);
-    }
-  };
-
-  const fetchReport = async () => {
+  async function fetchReport() {
     try {
       const params = { page: pagination.page, limit: pagination.limit, search };
       if (startDate) params.start_date = startDate;
@@ -89,33 +71,26 @@ const Report = () => {
       console.error(err);
       setToast({ message: "Gagal mengambil data laporan.", type: "error" });
     }
-  };
+  }
 
-  const calculateSummary = (items) => {
-    let tMasuk = 0;
-    let tKeluar = 0;
-    let nMasuk = 0;
-    let nKeluar = 0;
+  useEffect(() => {
+    let active = true;
+    api.get(ENDPOINTS.kategori)
+      .then((res) => {
+        if (active) setKategori(res.data);
+      })
+      .catch((error) => console.error(error));
 
-    items.forEach((item) => {
-      const total = Number(item.total) || 0;
-      const jumlah = Number(item.jumlah) || 0;
-      if (item.jenis_transaksi === "masuk") {
-        tMasuk += jumlah;
-        nMasuk += total;
-      } else if (item.jenis_transaksi === "keluar") {
-        tKeluar += jumlah;
-        nKeluar += total;
-      }
-    });
+    return () => {
+      active = false;
+    };
+  }, []);
 
-    setSummary({
-      totalMasuk: tMasuk,
-      totalKeluar: tKeluar,
-      nominalMasuk: nMasuk,
-      nominalKeluar: nKeluar,
-    });
-  };
+  useEffect(() => {
+    const timer = setTimeout(() => fetchReport(), 250);
+    return () => clearTimeout(timer);
+  }, [pagination.page, pagination.limit, search]);
+
 
   const handleFilter = (e) => {
     e.preventDefault();

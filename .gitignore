@@ -66,3 +66,8 @@ temp/
 
 # local test dependencies
 sacika-worker/.test-deps/
+
+# Test output
+coverage/
+frontend/coverage/
+backend/coverage/
