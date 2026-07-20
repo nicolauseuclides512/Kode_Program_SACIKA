@@ -151,3 +151,48 @@ test("runSalesAggregation is idempotent when executed twice and does not double 
     false,
   );
 });
+
+test("normalizeAffectedSalesPeriods deduplicates affected weekly and monthly buckets", () => {
+  const { normalizeAffectedSalesPeriods } = require("../services/salesAggregationService");
+  const affected = normalizeAffectedSalesPeriods([
+    { produk_id: 1, tanggal: "2026-01-02" },
+    { produk_id: 1, tanggal: "2026-01-04" },
+    { produk_id: 1, tanggal: "2026-01-22" },
+  ]);
+
+  assert.equal(affected.weekly.length, 2);
+  assert.equal(affected.monthly.length, 1);
+  assert.deepEqual(
+    affected.weekly.map((row) => row.period_label),
+    ["Jan 26-W1", "Jan 26-W4"],
+  );
+});
+
+test("refreshSalesAggregationForChanges recalculates exact totals instead of incrementing old totals", async () => {
+  const { refreshSalesAggregationForChanges } = require("../services/salesAggregationService");
+  const queries = [];
+  const client = {
+    async query(sql, params = []) {
+      queries.push({ sql, params });
+      if (sql.includes("SELECT COALESCE(SUM(jumlah), 0)")) {
+        return { rows: [{ total_penjualan: 7 }] };
+      }
+      return { rows: [] };
+    },
+  };
+
+  const result = await refreshSalesAggregationForChanges(client, [
+    { produk_id: 1, tanggal: "2026-01-04" },
+  ]);
+
+  assert.equal(result.affected_weekly_records, 1);
+  assert.equal(result.affected_monthly_records, 1);
+  assert.equal(
+    queries.some(({ sql }) => sql.includes("total_penjualan = EXCLUDED.total_penjualan")),
+    true,
+  );
+  assert.equal(
+    queries.some(({ sql }) => sql.includes("total_penjualan + EXCLUDED.total_penjualan")),
+    false,
+  );
+});

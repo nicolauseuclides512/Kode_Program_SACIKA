@@ -102,17 +102,18 @@ class PredictEndpointTest(unittest.TestCase):
         body = response.get_json()
         self.assertIn("periods harus berurutan bulanan tanpa loncatan", body["errors"])
 
-    def test_predict_counts_null_as_missing_without_filling_zero(self):
+    def test_predict_rejects_null_values_instead_of_compressing_missing_months(self):
         payload = valid_payload()
         payload["values"][0] = None
 
         response = self.client.post("/predict", json=payload)
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 400)
         body = response.get_json()
-        self.assertIsNotNone(body["warning"])
-        self.assertIn("Terdapat bulan hilang pada histori", body["warning"])
-        json.dumps(body["candidate_models"])
+        self.assertIn(
+            "values[0] tidak boleh null; gunakan segmen histori bulanan kontinu",
+            body["errors"],
+        )
 
     def test_predict_rejects_horizon_above_temporary_limit(self):
         payload = valid_payload()

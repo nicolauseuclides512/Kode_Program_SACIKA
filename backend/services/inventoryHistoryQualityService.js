@@ -1,5 +1,3 @@
-const { createExpectedPeriods } = require("./monthlyInventoryImporter");
-
 const DEFAULT_MIN_OBSERVATION_COUNT = 18;
 const DEFAULT_HIGH_ZERO_RATIO_THRESHOLD = 0.5;
 const VALID_OBSERVATION_STATUSES = new Set(["observed", "corrected"]);
@@ -9,8 +7,16 @@ function formatPeriod(value) {
   if (!value) return null;
   if (value instanceof Date) return value.toISOString().slice(0, 10);
 
-  const text = String(value);
-  return text.includes("T") ? text.slice(0, 10) : text.slice(0, 10);
+  const text = String(value).trim();
+  if (!text) return null;
+
+  const match = text.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?/);
+  if (!match) return null;
+
+  const month = Number(match[2]);
+  if (month < 1 || month > 12) return null;
+
+  return `${match[1]}-${match[2]}-01`;
 }
 
 function formatMonth(value) {
@@ -22,37 +28,51 @@ function parsePeriodParam(value, fieldName) {
   if (!value) return null;
 
   const text = String(value).trim();
-  const match = text.match(/^(\d{4})-(\d{2})(?:-\d{2})?$/);
-
+  const match = text.match(/^(\d{4})-(\d{2})(?:-(\d{2}))?$/);
   if (!match) {
     throw new Error(`${fieldName} harus berformat YYYY-MM atau YYYY-MM-DD`);
   }
 
-  const year = Number(match[1]);
   const month = Number(match[2]);
-
   if (month < 1 || month > 12) {
     throw new Error(`${fieldName} memiliki bulan tidak valid`);
   }
 
-  return `${year}-${String(month).padStart(2, "0")}-01`;
+  return `${match[1]}-${match[2]}-01`;
 }
 
 function addMonth(period) {
-  const [year, month] = period.split("-").map(Number);
+  const normalized = formatPeriod(period);
+  if (!normalized) return null;
+
+  const [year, month] = normalized.split("-").map(Number);
   const nextMonth = month === 12 ? 1 : month + 1;
   const nextYear = month === 12 ? year + 1 : year;
 
   return `${nextYear}-${String(nextMonth).padStart(2, "0")}-01`;
 }
 
+function subtractMonths(period, count) {
+  const normalized = formatPeriod(period);
+  if (!normalized || !Number.isInteger(count) || count < 0) return null;
+
+  const [year, month] = normalized.split("-").map(Number);
+  const absoluteMonth = (year * 12) + (month - 1) - count;
+  const targetYear = Math.floor(absoluteMonth / 12);
+  const targetMonth = (absoluteMonth % 12) + 1;
+
+  return `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
+}
+
 function createMonthRange(startPeriod, endPeriod) {
-  if (!startPeriod || !endPeriod || startPeriod > endPeriod) return [];
+  const start = formatPeriod(startPeriod);
+  const end = formatPeriod(endPeriod);
+  if (!start || !end || start > end) return [];
 
   const periods = [];
-  let current = startPeriod;
+  let current = start;
 
-  while (current <= endPeriod) {
+  while (current <= end) {
     periods.push(current);
     current = addMonth(current);
   }
@@ -66,8 +86,8 @@ function toNumberOrNull(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function buildInventoryHistoryResponse(product, rows, filters = {}) {
-  const normalizedRows = rows
+function normalizeRows(rows = []) {
+  return rows
     .map((row) => ({
       ...row,
       periode: formatPeriod(row.periode),
@@ -76,7 +96,105 @@ function buildInventoryHistoryResponse(product, rows, filters = {}) {
     }))
     .filter((row) => row.periode)
     .sort((a, b) => a.periode.localeCompare(b.periode));
+}
 
+function isValidObservation(row) {
+  return Boolean(
+    row
+    && VALID_OBSERVATION_STATUSES.has(row.status_data || "observed")
+    && toNumberOrNull(row.stok_akhir) !== null,
+  );
+}
+
+function findContiguousSegments(periods = [], values = []) {
+  if (periods.length !== values.length) {
+    throw new Error("Panjang periods dan values harus sama");
+  }
+
+  const segments = [];
+  let current = null;
+
+  for (let index = 0; index < periods.length; index += 1) {
+    const period = formatMonth(periods[index]);
+    const value = toNumberOrNull(values[index]);
+    const previousPeriod = index > 0 ? formatMonth(periods[index - 1]) : null;
+    const expectedCurrent = previousPeriod ? formatMonth(addMonth(`${previousPeriod}-01`)) : null;
+    const monthIsConsecutive = index === 0 || period === expectedCurrent;
+
+    if (period && value !== null && monthIsConsecutive) {
+      if (!current) {
+        current = {
+          start_index: index,
+          end_index: index,
+          periods: [],
+          values: [],
+        };
+      }
+
+      current.periods.push(period);
+      current.values.push(value);
+      current.end_index = index;
+      continue;
+    }
+
+    if (current) {
+      segments.push(current);
+      current = null;
+    }
+
+    if (period && value !== null) {
+      current = {
+        start_index: index,
+        end_index: index,
+        periods: [period],
+        values: [value],
+      };
+    }
+  }
+
+  if (current) segments.push(current);
+
+  return segments.map((segment) => ({
+    ...segment,
+    observation_count: segment.values.length,
+    period_start: segment.periods[0] || null,
+    period_end: segment.periods[segment.periods.length - 1] || null,
+  }));
+}
+
+function findLatestContiguousSegment(periods = [], values = []) {
+  const segments = findContiguousSegments(periods, values);
+  return segments.length > 0
+    ? segments[segments.length - 1]
+    : {
+      start_index: null,
+      end_index: null,
+      periods: [],
+      values: [],
+      observation_count: 0,
+      period_start: null,
+      period_end: null,
+    };
+}
+
+function findLongestContiguousSegment(periods = [], values = []) {
+  const segments = findContiguousSegments(periods, values);
+  if (segments.length === 0) return findLatestContiguousSegment([], []);
+
+  return segments.reduce((best, candidate) => {
+    if (candidate.observation_count > best.observation_count) return candidate;
+    if (
+      candidate.observation_count === best.observation_count
+      && candidate.end_index > best.end_index
+    ) {
+      return candidate;
+    }
+    return best;
+  });
+}
+
+function buildInventoryHistoryResponse(product, rows, filters = {}) {
+  const normalizedRows = normalizeRows(rows);
   if (normalizedRows.length === 0) return null;
 
   const startPeriod = filters.startPeriod || normalizedRows[0].periode;
@@ -91,14 +209,17 @@ function buildInventoryHistoryResponse(product, rows, filters = {}) {
   const periods = [];
   const values = [];
   const missingPeriods = [];
+  const statuses = [];
   let observationCount = 0;
 
   for (const periode of monthRange) {
     const row = rowByPeriod.get(periode);
-    const isMissing = !row || NULL_VALUE_STATUSES.has(row.status_data) || row.stok_akhir === null;
+    const status = row?.status_data || "missing";
+    const isMissing = !row || NULL_VALUE_STATUSES.has(status) || !isValidObservation(row);
 
     periods.push(formatMonth(periode));
     values.push(isMissing ? null : row.stok_akhir);
+    statuses.push(status);
 
     if (isMissing) {
       missingPeriods.push(formatMonth(periode));
@@ -107,19 +228,28 @@ function buildInventoryHistoryResponse(product, rows, filters = {}) {
     }
   }
 
+  const latestSegment = findLatestContiguousSegment(periods, values);
+  const longestSegment = findLongestContiguousSegment(periods, values);
+
   return {
     produk: {
       id: Number(product.id),
       nama: product.nama_produk,
       stok_saat_ini: toNumberOrNull(product.stok),
       stok_minimum: toNumberOrNull(product.stok_minimum),
+      is_active: product.is_active !== false,
+      active_from: formatMonth(product.active_from),
+      active_until: formatMonth(product.active_until),
     },
     target: "ending_inventory",
     frequency: "monthly",
     periods,
     values,
+    statuses,
     observation_count: observationCount,
     missing_periods: missingPeriods,
+    latest_contiguous_segment: latestSegment,
+    longest_contiguous_segment: longestSegment,
   };
 }
 
@@ -145,21 +275,14 @@ function normalizeDuplicatePeriods(duplicatePeriods = []) {
   }));
 }
 
-function getLatestValidObservationByPeriod(rows = []) {
+function getLatestValidObservationByPeriod(rows = [], expectedPeriodSet = null) {
   const byPeriod = new Map();
 
-  for (const row of rows) {
-    const periode = formatPeriod(row.periode);
-    const stokAkhir = toNumberOrNull(row.stok_akhir);
-    const statusData = row.status_data || "observed";
+  for (const row of normalizeRows(rows)) {
+    if (expectedPeriodSet && !expectedPeriodSet.has(row.periode)) continue;
+    if (!isValidObservation(row)) continue;
 
-    if (!periode || !VALID_OBSERVATION_STATUSES.has(statusData) || stokAkhir === null) continue;
-
-    byPeriod.set(periode, {
-      ...row,
-      periode,
-      stok_akhir: stokAkhir,
-    });
+    byPeriod.set(row.periode, row);
   }
 
   return Array.from(byPeriod.values())
@@ -186,7 +309,9 @@ function filterPeriodsByLifecycle(periods, product = {}) {
   const activeFrom = normalizeLifecyclePeriod(product.active_from);
   const activeUntil = normalizeLifecyclePeriod(product.active_until);
 
-  return periods.filter((periode) => {
+  return periods.filter((periodeInput) => {
+    const periode = formatPeriod(periodeInput);
+    if (!periode) return false;
     if (activeFrom && periode < activeFrom) return false;
     if (activeUntil && periode > activeUntil) return false;
     return true;
@@ -195,19 +320,31 @@ function filterPeriodsByLifecycle(periods, product = {}) {
 
 function deriveExpectedPeriods(product, rows, options = {}) {
   if (Array.isArray(options.expectedPeriods)) {
-    return filterPeriodsByLifecycle(options.expectedPeriods, product);
+    return filterPeriodsByLifecycle(
+      options.expectedPeriods.map(formatPeriod).filter(Boolean),
+      product,
+    );
   }
 
-  const normalizedPeriods = rows
-    .map((row) => formatPeriod(row.periode))
-    .filter(Boolean)
-    .sort();
+  const normalizedPeriods = normalizeRows(rows).map((row) => row.periode);
+  const firstObservedPeriod = normalizedPeriods[0] || null;
+  const lastObservedPeriod = normalizedPeriods[normalizedPeriods.length - 1] || null;
   const activeFrom = normalizeLifecyclePeriod(product.active_from);
   const activeUntil = normalizeLifecyclePeriod(product.active_until);
-  const startPeriod = activeFrom || normalizedPeriods[0] || null;
-  const endPeriod = activeUntil
-    || normalizedPeriods[normalizedPeriods.length - 1]
-    || null;
+  const requestedStart = formatPeriod(options.startPeriod || options.start_period);
+  const requestedEnd = formatPeriod(options.endPeriod || options.end_period);
+
+  let startPeriod = requestedStart || activeFrom || firstObservedPeriod;
+  let endPeriod = requestedEnd || activeUntil || lastObservedPeriod;
+
+  if (activeFrom && (!startPeriod || startPeriod < activeFrom)) startPeriod = activeFrom;
+  if (activeUntil && (!endPeriod || endPeriod > activeUntil)) endPeriod = activeUntil;
+
+  const windowMonths = Number(options.windowMonths || options.window_months);
+  if (Number.isInteger(windowMonths) && windowMonths > 0 && endPeriod) {
+    const rollingStart = subtractMonths(endPeriod, windowMonths - 1);
+    if (!startPeriod || rollingStart > startPeriod) startPeriod = rollingStart;
+  }
 
   if (!startPeriod || !endPeriod || startPeriod > endPeriod) return [];
   return createMonthRange(startPeriod, endPeriod);
@@ -216,38 +353,47 @@ function deriveExpectedPeriods(product, rows, options = {}) {
 function countStatusPeriods(rows, status) {
   const periods = new Set();
 
-  for (const row of rows) {
-    if ((row.status_data || "observed") === status) {
-      const periode = formatPeriod(row.periode);
-      if (periode) periods.add(periode);
-    }
+  for (const row of normalizeRows(rows)) {
+    if (row.status_data === status) periods.add(row.periode);
   }
 
   return [...periods].sort();
 }
 
+function buildTimeline(expectedPeriods, rows) {
+  const rowByPeriod = new Map();
+  for (const row of normalizeRows(rows)) rowByPeriod.set(row.periode, row);
+
+  const periods = expectedPeriods.map(formatMonth);
+  const values = expectedPeriods.map((periode) => {
+    const row = rowByPeriod.get(periode);
+    return isValidObservation(row) ? row.stok_akhir : null;
+  });
+
+  return { periods, values };
+}
+
 function calculateProductQuality(product, rows = [], duplicatePeriods = [], options = {}) {
   const expectedPeriods = deriveExpectedPeriods(product, rows, options);
-  const minObservationCount = options.minObservationCount || DEFAULT_MIN_OBSERVATION_COUNT;
+  const expectedPeriodSet = new Set(expectedPeriods);
+  const minObservationCount = Number(options.minObservationCount)
+    || DEFAULT_MIN_OBSERVATION_COUNT;
   const highZeroRatioThreshold = options.highZeroRatioThreshold
     ?? DEFAULT_HIGH_ZERO_RATIO_THRESHOLD;
 
-  const validObservations = getLatestValidObservationByPeriod(rows);
-  const observedPeriodSet = new Set(validObservations.map((row) => row.periode));
-  const explicitMissingMonths = countStatusPeriods(rows, "missing");
-  const notListedMonths = countStatusPeriods(rows, "not_listed");
+  const validObservations = getLatestValidObservationByPeriod(rows, expectedPeriodSet);
+  const explicitMissingMonths = countStatusPeriods(rows, "missing")
+    .filter((period) => expectedPeriodSet.has(period));
+  const notListedMonths = countStatusPeriods(rows, "not_listed")
+    .filter((period) => expectedPeriodSet.has(period));
   const notActiveMonths = countStatusPeriods(rows, "not_active");
-  const rowPeriodSet = new Set(
-    rows.map((row) => formatPeriod(row.periode)).filter(Boolean),
-  );
-  const implicitMissingMonths = expectedPeriods.filter(
-    (periode) => !rowPeriodSet.has(periode),
-  );
-  const missingMonths = [...new Set([
-    ...explicitMissingMonths.filter((period) => expectedPeriods.includes(period)),
-    ...implicitMissingMonths,
-  ])].sort();
+  const rowPeriodSet = new Set(normalizeRows(rows).map((row) => row.periode));
+  const implicitMissingMonths = expectedPeriods.filter((periode) => !rowPeriodSet.has(periode));
+  const missingMonths = [...new Set([...explicitMissingMonths, ...implicitMissingMonths])].sort();
   const values = validObservations.map((row) => row.stok_akhir);
+  const timeline = buildTimeline(expectedPeriods, rows);
+  const latestSegment = findLatestContiguousSegment(timeline.periods, timeline.values);
+  const longestSegment = findLongestContiguousSegment(timeline.periods, timeline.values);
 
   const observationCount = validObservations.length;
   const zeroMonthCount = values.filter((value) => value === 0).length;
@@ -263,49 +409,41 @@ function calculateProductQuality(product, rows = [], duplicatePeriods = [], opti
   const hasDuplicatePeriods = normalizedDuplicatePeriods.length > 0;
   const messages = [];
   const productIsActive = product.is_active !== false;
+  const hasEnoughContinuousHistory = latestSegment.observation_count >= minObservationCount;
   let status = "eligible";
 
   if (!productIsActive) {
     status = "not_eligible";
     messages.push("Produk berstatus tidak aktif");
-  } else if (observationCount < minObservationCount) {
+  } else if (!hasEnoughContinuousHistory) {
     status = "not_eligible";
-    messages.push(`Observasi valid kurang dari ${minObservationCount} bulan`);
+    messages.push(
+      `Segmen kontinu terbaru kurang dari ${minObservationCount} bulan`,
+    );
   } else if (
     missingMonths.length > 0
     || notListedMonths.length > 0
     || zeroRatio >= highZeroRatioThreshold
+    || hasDuplicatePeriods
   ) {
     status = "warning";
   }
 
-  if (observationCount === 0) {
-    messages.push("Belum ada observasi valid");
-  }
-
+  if (observationCount === 0) messages.push("Belum ada observasi valid");
   if (missingMonths.length > 0) {
     messages.push(`${missingMonths.length} bulan memiliki nilai stok yang hilang`);
   }
-
   if (notListedMonths.length > 0) {
     messages.push(`${notListedMonths.length} bulan produk tidak tercantum pada sumber`);
   }
-
   if (notActiveMonths.length > 0) {
     messages.push(`${notActiveMonths.length} bulan berada di luar periode aktif produk`);
   }
-
   if (zeroRatio >= highZeroRatioThreshold && observationCount > 0) {
     messages.push(`Rasio stok nol tinggi (${roundMetric(zeroRatio * 100, 2)}%)`);
   }
-
-  if (hasDuplicatePeriods) {
-    messages.push("Terdapat periode duplikat");
-  }
-
-  if (messages.length === 0) {
-    messages.push("Data layak untuk analisis awal");
-  }
+  if (hasDuplicatePeriods) messages.push("Terdapat periode duplikat");
+  if (messages.length === 0) messages.push("Data layak untuk analisis awal");
 
   return {
     produk_id: Number(product.id || product.produk_id),
@@ -313,6 +451,8 @@ function calculateProductQuality(product, rows = [], duplicatePeriods = [], opti
     observation_count: observationCount,
     period_start: validObservations[0]?.periode || null,
     period_end: validObservations[validObservations.length - 1]?.periode || null,
+    quality_window_start: expectedPeriods[0] || null,
+    quality_window_end: expectedPeriods[expectedPeriods.length - 1] || null,
     is_active: productIsActive,
     active_from: normalizeLifecyclePeriod(product.active_from),
     active_until: normalizeLifecyclePeriod(product.active_until),
@@ -332,7 +472,21 @@ function calculateProductQuality(product, rows = [], duplicatePeriods = [], opti
     stock_change_count: countStockChanges(validObservations),
     has_duplicate_periods: hasDuplicatePeriods,
     duplicate_periods: normalizedDuplicatePeriods,
-    eligible: productIsActive && observationCount >= minObservationCount,
+    latest_contiguous_observation_count: latestSegment.observation_count,
+    latest_contiguous_period_start: latestSegment.period_start
+      ? `${latestSegment.period_start}-01`
+      : null,
+    latest_contiguous_period_end: latestSegment.period_end
+      ? `${latestSegment.period_end}-01`
+      : null,
+    longest_contiguous_observation_count: longestSegment.observation_count,
+    longest_contiguous_period_start: longestSegment.period_start
+      ? `${longestSegment.period_start}-01`
+      : null,
+    longest_contiguous_period_end: longestSegment.period_end
+      ? `${longestSegment.period_end}-01`
+      : null,
+    eligible: productIsActive && hasEnoughContinuousHistory,
     status,
     messages,
   };
@@ -432,14 +586,8 @@ async function getInventoryHistory(db, produkId, filters = {}) {
     endPeriod,
   });
 
-  if (!response) {
-    return { status: "history_not_found" };
-  }
-
-  return {
-    status: "ok",
-    data: response,
-  };
+  if (!response) return { status: "history_not_found" };
+  return { status: "ok", data: response };
 }
 
 async function getQualitySummary(db, options = {}) {
@@ -481,35 +629,36 @@ async function getQualitySummary(db, options = {}) {
     duplicatesByProduct.set(row.produk_id, productDuplicates);
   }
 
-  const products = productResult.rows.map((product) => {
-    return calculateProductQuality(
-      product,
-      rowsByProduct.get(product.id) || [],
-      duplicatesByProduct.get(product.id) || [],
-      options,
-    );
-  });
+  const products = productResult.rows.map((product) => calculateProductQuality(
+    product,
+    rowsByProduct.get(product.id) || [],
+    duplicatesByProduct.get(product.id) || [],
+    options,
+  ));
 
-  const statusCounts = {
-    eligible: 0,
-    warning: 0,
-    not_eligible: 0,
-  };
-
-  for (const product of products) {
-    statusCounts[product.status] += 1;
-  }
+  const statusCounts = { eligible: 0, warning: 0, not_eligible: 0 };
+  for (const product of products) statusCounts[product.status] += 1;
 
   return {
     total_products: products.length,
     status_counts: statusCounts,
+    quality_window: {
+      start_period: formatMonth(options.startPeriod || options.start_period),
+      end_period: formatMonth(options.endPeriod || options.end_period),
+      window_months: Number(options.windowMonths || options.window_months) || null,
+    },
     products: products.map((product) => ({
       produk_id: product.produk_id,
       nama_produk: product.nama_produk,
       observation_count: product.observation_count,
+      latest_contiguous_observation_count: product.latest_contiguous_observation_count,
+      latest_contiguous_period_start: product.latest_contiguous_period_start,
+      latest_contiguous_period_end: product.latest_contiguous_period_end,
       is_active: product.is_active,
       active_from: product.active_from,
       active_until: product.active_until,
+      quality_window_start: product.quality_window_start,
+      quality_window_end: product.quality_window_end,
       missing_month_count: product.missing_month_count,
       not_listed_month_count: product.not_listed_month_count,
       zero_ratio: product.zero_ratio,
@@ -526,6 +675,9 @@ module.exports = {
   createMonthRange,
   deriveExpectedPeriods,
   filterPeriodsByLifecycle,
+  findContiguousSegments,
+  findLatestContiguousSegment,
+  findLongestContiguousSegment,
   getProductQuality,
   getInventoryHistory,
   getQualitySummary,

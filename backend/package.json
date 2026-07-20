@@ -12,7 +12,9 @@
     "db:status": "node scripts/migrationStatus.js",
     "db:rollback": "node scripts/rollbackMigration.js",
     "db:seed": "node scripts/seed.js",
-    "bootstrap:products": "node scripts/bootstrapProductsFromWorkbook.js"
+    "bootstrap:products": "node scripts/bootstrapProductsFromWorkbook.js",
+    "snapshot:monthly": "node scripts/createMonthlySnapshot.js",
+    "sync:current-stock": "node scripts/syncCurrentStockFromSnapshots.js"
   },
   "keywords": [],
   "author": "",

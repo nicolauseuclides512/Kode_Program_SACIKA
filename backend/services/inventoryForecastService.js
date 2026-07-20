@@ -1,6 +1,7 @@
 const axios = require("axios");
 
 const {
+  findLatestContiguousSegment,
   getInventoryHistory,
   getProductQuality,
 } = require("./inventoryHistoryQualityService");
@@ -87,13 +88,50 @@ function toNumberOrNull(value) {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function selectForecastTrainingHistory(history, minObservationCount = MIN_OBSERVATION_COUNT) {
+  if (!history || !Array.isArray(history.periods) || !Array.isArray(history.values)) {
+    throw new InventoryForecastError(422, "Histori persediaan bulanan tidak valid");
+  }
+
+  const segment = history.latest_contiguous_segment
+    || findLatestContiguousSegment(history.periods, history.values);
+
+  if (segment.observation_count < minObservationCount) {
+    throw new InventoryForecastError(
+      422,
+      "Histori persediaan belum memiliki segmen bulanan kontinu yang cukup",
+      {
+        latest_contiguous_observation_count: segment.observation_count,
+        minimum_observation_count: minObservationCount,
+        latest_contiguous_period_start: segment.period_start,
+        latest_contiguous_period_end: segment.period_end,
+        missing_periods: history.missing_periods || [],
+      },
+    );
+  }
+
+  return {
+    ...history,
+    periods: [...segment.periods],
+    values: [...segment.values],
+    observation_count: segment.observation_count,
+    missing_periods: [],
+    source_observation_count: history.observation_count,
+    source_missing_periods: history.missing_periods || [],
+    training_period_start: segment.period_start,
+    training_period_end: segment.period_end,
+  };
+}
+
 function buildWorkerPayload(produkId, history, horizon = 1) {
+  const trainingHistory = selectForecastTrainingHistory(history);
+
   return {
     product_id: produkId,
     target: TARGET,
     frequency: FREQUENCY,
-    periods: history.periods,
-    values: history.values,
+    periods: trainingHistory.periods,
+    values: trainingHistory.values,
     horizon,
   };
 }
@@ -316,12 +354,16 @@ async function runInventoryForecast(db, produkIdInput, options = {}) {
     throw new InventoryForecastError(404, "Produk tidak ditemukan");
   }
 
-  if (quality.observation_count < MIN_OBSERVATION_COUNT) {
+  if (quality.latest_contiguous_observation_count < MIN_OBSERVATION_COUNT) {
     throw new InventoryForecastError(
       422,
-      "Histori persediaan bulanan belum cukup untuk forecasting",
+      "Histori persediaan bulanan kontinu belum cukup untuk forecasting",
       {
         observation_count: quality.observation_count,
+        latest_contiguous_observation_count:
+          quality.latest_contiguous_observation_count,
+        latest_contiguous_period_start: quality.latest_contiguous_period_start,
+        latest_contiguous_period_end: quality.latest_contiguous_period_end,
         minimum_observation_count: MIN_OBSERVATION_COUNT,
         status: quality.status,
         messages: quality.messages,
@@ -329,10 +371,11 @@ async function runInventoryForecast(db, produkIdInput, options = {}) {
     );
   }
 
-  const payload = buildWorkerPayload(produkId, historyResult.data, horizon);
+  const trainingHistory = selectForecastTrainingHistory(historyResult.data);
+  const payload = buildWorkerPayload(produkId, trainingHistory, horizon);
   const workerResult = await callForecastWorker(payload, options);
   const forecast = validateWorkerResponse(workerResult, produkId);
-  const saved = await saveForecastResults(db, produkId, historyResult.data, forecast);
+  const saved = await saveForecastResults(db, produkId, trainingHistory, forecast);
 
   return {
     ...forecast,
@@ -340,6 +383,10 @@ async function runInventoryForecast(db, produkIdInput, options = {}) {
     forecast_result_ids: saved.forecast_result_ids,
     quality: {
       observation_count: quality.observation_count,
+      latest_contiguous_observation_count:
+        quality.latest_contiguous_observation_count,
+      training_period_start: trainingHistory.training_period_start,
+      training_period_end: trainingHistory.training_period_end,
       missing_months: quality.missing_months,
       zero_ratio: quality.zero_ratio,
       eligible: quality.eligible,
@@ -514,6 +561,7 @@ module.exports = {
   getLatestInventoryForecast,
   getRiskLevel,
   parseHorizon,
+  selectForecastTrainingHistory,
   runInventoryForecast,
   validateWorkerResponse,
 };

@@ -27,7 +27,7 @@ function createResponse() {
   };
 }
 
-test("calculateProductQuality computes monthly metrics without filling missing as zero", () => {
+test("calculateProductQuality detects gaps and does not treat scattered observations as continuous", () => {
   const quality = calculateProductQuality(
     { id: 1, nama_produk: "Aqua Botol 600 ml" },
     [
@@ -52,8 +52,9 @@ test("calculateProductQuality computes monthly metrics without filling missing a
   assert.equal(quality.max_stock, 15);
   assert.equal(quality.stock_change_count, 2);
   assert.equal(quality.has_duplicate_periods, true);
-  assert.equal(quality.eligible, true);
-  assert.equal(quality.status, "warning");
+  assert.equal(quality.latest_contiguous_observation_count, 1);
+  assert.equal(quality.eligible, false);
+  assert.equal(quality.status, "not_eligible");
 });
 
 test("calculateProductQuality marks products with fewer than 18 observations as not eligible", () => {

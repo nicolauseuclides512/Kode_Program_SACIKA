@@ -56,6 +56,9 @@ def validate_values(values):
 
     for index, value in enumerate(values):
         if value is None:
+            errors.append(
+                f"values[{index}] tidak boleh null; gunakan segmen histori bulanan kontinu"
+            )
             normalized.append(None)
             continue
 

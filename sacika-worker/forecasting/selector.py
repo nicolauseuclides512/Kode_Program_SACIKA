@@ -1,6 +1,6 @@
 from functools import partial
 
-from .metrics import is_number, rolling_origin_validation, zero_ratio
+from .metrics import rolling_origin_validation, zero_ratio
 from .models import (
     ALLOWED_ARIMA_ORDERS,
     arima_forecast,
@@ -45,16 +45,16 @@ def generate_future_periods(last_period, horizon):
     return periods
 
 
-def _valid_history(periods, values):
-    valid_periods = []
-    valid_values = []
+def _continuous_history(periods, values):
+    if len(periods) != len(values):
+        raise ForecastSelectionError("Panjang periods dan values tidak sama")
 
-    for period, value in zip(periods, values):
-        if is_number(value):
-            valid_periods.append(period)
-            valid_values.append(float(value))
+    if any(value is None for value in values):
+        raise ForecastSelectionError(
+            "Histori worker harus berupa segmen bulanan kontinu tanpa nilai null"
+        )
 
-    return valid_periods, valid_values
+    return list(periods), [float(value) for value in values]
 
 
 def _candidate_summary(display_name, evaluation, metadata=None):
@@ -243,7 +243,7 @@ def _forecast_far_outside_history(values, forecast_values):
 
 def handle_prediction_request(payload):
     validated_payload = validate_prediction_payload(payload)
-    valid_periods, valid_values = _valid_history(
+    valid_periods, valid_values = _continuous_history(
         validated_payload["periods"],
         validated_payload["values"],
     )

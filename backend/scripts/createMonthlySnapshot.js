@@ -6,9 +6,7 @@ const fs = require("fs");
 const path = require("path");
 
 const db = require("../config/database");
-const {
-  syncCurrentStockFromSnapshots,
-} = require("../services/currentStockSyncService");
+const { createMonthlySnapshots } = require("../services/monthlySnapshotService");
 
 function readOption(args, name) {
   const equalArg = args.find((arg) => arg.startsWith(`${name}=`));
@@ -29,14 +27,16 @@ function parseArgs(argv) {
   }
 
   return {
+    period: readOption(args, "--period") || null,
     commit,
+    force: args.includes("--force"),
     output: readOption(args, "--output") || "",
   };
 }
 
 async function main() {
   const options = parseArgs(process.argv);
-  const result = await syncCurrentStockFromSnapshots(db, options);
+  const result = await createMonthlySnapshots(db, options);
   const text = JSON.stringify(result, null, 2);
 
   if (options.output) {

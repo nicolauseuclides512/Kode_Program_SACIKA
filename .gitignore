@@ -63,3 +63,6 @@ tmp/
 temp/
 *.tmp
 *.bak
+
+# local test dependencies
+sacika-worker/.test-deps/
