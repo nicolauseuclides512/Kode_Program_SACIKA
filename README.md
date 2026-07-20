@@ -140,6 +140,13 @@ cd backend
 npm run db:rollback
 ```
 
+Periksa kesehatan dan integritas database:
+
+```bash
+cd backend
+npm run db:check
+```
+
 Urutan migration saat ini:
 
 1. `202607170001_create_core_schema.up.sql`
@@ -450,4 +457,5 @@ Worker menerima deret waktu langsung dari request body. Worker tidak mengambil d
 - Prediksi penjualan baru layak dibuat dari transaksi keluar aktual yang benar-benar tercatat di sistem.
 - Produk yang belum dapat dipetakan dari Excel harus diselesaikan lewat alias/manual review.
 - Warning kualitas data tidak mengubah nilai prediksi.
+
 
