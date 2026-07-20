@@ -125,6 +125,15 @@ function getCorsAllowedOrigins() {
   return origins;
 }
 
+
+function validateBodyLimit(value) {
+  const text = String(value || "1mb").trim().toLowerCase();
+  if (!/^\d+(?:b|kb|mb)?$/.test(text)) {
+    throw new Error("JSON_BODY_LIMIT harus berupa ukuran seperti 512kb atau 1mb.");
+  }
+  return text;
+}
+
 function validateRuntimeEnvironment() {
   const requiredVariables = [
     "DATABASE_URL",
@@ -157,6 +166,7 @@ function validateRuntimeEnvironment() {
   });
   readPercentageEnv("FORECAST_MIN_IMPROVEMENT_OVER_NAIVE_PCT", 5);
   readPercentageEnv("FORECAST_MAE_TIE_RELATIVE_TOLERANCE_PCT", 1);
+  validateBodyLimit(process.env.JSON_BODY_LIMIT || "1mb");
 }
 
 function getLoginRateLimitConfig() {
@@ -188,5 +198,6 @@ module.exports = {
   normalizeOrigin,
   readPercentageEnv,
   readPositiveIntegerEnv,
+  validateBodyLimit,
   validateRuntimeEnvironment,
 };

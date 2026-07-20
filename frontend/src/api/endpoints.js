@@ -10,6 +10,7 @@ export const ENDPOINTS = {
 
 
   laporan: "/laporan",
+  dashboardSummary: "/dashboard/summary",
 
 
   transaksiMasuk: "/transaksi?jenis=masuk",

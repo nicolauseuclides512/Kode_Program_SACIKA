@@ -30,10 +30,12 @@ import {
 const Produk = () => {
   const [data, setData] = useState([]);
   const [kategori, setKategori] = useState([]);
-  
+  const [search, setSearch] = useState("");
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, total_pages: 1 });
+
   const [loading, setLoading] = useState(false);
-  
-  
+
+
   const [nama, setNama] = useState("");
   const [harga, setHarga] = useState("");
   const [stokMinimum, setStokMinimum] = useState("");
@@ -43,24 +45,31 @@ const Produk = () => {
   const [activeUntil, setActiveUntil] = useState("");
   const [editId, setEditId] = useState(null);
 
-  
+
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
   const [deleteId, setDeleteId] = useState(null);
 
-  
+
   const [toast, setToast] = useState(null);
 
   useEffect(() => {
-    fetchData();
     fetchKategori();
   }, []);
 
+  useEffect(() => {
+    const timer = setTimeout(() => fetchData(), 250);
+    return () => clearTimeout(timer);
+  }, [pagination.page, pagination.limit, search]);
+
   const fetchData = async () => {
     try {
-      const res = await api.get(ENDPOINTS.produk);
-      setData(res.data);
+      const res = await api.get(ENDPOINTS.produk, {
+        params: { page: pagination.page, limit: pagination.limit, search, status: "all" },
+      });
+      setData(res.data.data);
+      setPagination((current) => ({ ...current, ...res.data.pagination }));
     } catch (err) {
       console.error(err);
     }
@@ -233,6 +242,11 @@ const Produk = () => {
             searchPlaceholder="Cari produk berdasarkan nama atau kategori..."
             searchableFields={["nama_produk", "nama_kategori"]}
             pageSize={10}
+            serverPagination={pagination}
+            searchTerm={search}
+            onSearchChange={(value) => { setSearch(value); setPagination((current) => ({ ...current, page: 1 })); }}
+            onPageChange={(page) => setPagination((current) => ({ ...current, page }))}
+            onPageSizeChange={(limit) => setPagination((current) => ({ ...current, page: 1, limit }))}
           />
         </CardContent>
       </Card>
@@ -254,7 +268,7 @@ const Produk = () => {
                   required
                 />
               </div>
-              
+
               <div className="grid grid-cols-2 gap-4">
                 <div className="grid gap-2">
                   <label className="text-sm font-medium leading-none">Harga Jual (Rp)</label>
@@ -453,10 +467,10 @@ const Produk = () => {
 
       {}
       {toast && (
-        <Toast 
-          message={toast.message} 
-          type={toast.type} 
-          onClose={() => setToast(null)} 
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
         />
       )}
     </div>

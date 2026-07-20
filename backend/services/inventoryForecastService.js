@@ -780,6 +780,8 @@ async function getInventoryRiskSummary(db) {
         JOIN forecast_result result ON result.forecast_run_id=run.id
         JOIN produk p ON p.id=run.produk_id
         WHERE result.forecast_period > run.data_cutoff
+          AND p.deleted_at IS NULL
+          AND p.is_active=TRUE
         ORDER BY run.produk_id, result.forecast_period ASC, result.id ASC
       )
       SELECT *
@@ -801,7 +803,7 @@ async function getLatestInventoryForecast(db, produkIdInput) {
   await refreshForecastFreshness(db, produkId);
 
   const productResult = await db.query(
-    "SELECT id, nama_produk, stok, stok_minimum FROM produk WHERE id=$1",
+    "SELECT id, nama_produk, stok, stok_minimum FROM produk WHERE id=$1 AND deleted_at IS NULL",
     [produkId],
   );
   if (productResult.rows.length === 0) {

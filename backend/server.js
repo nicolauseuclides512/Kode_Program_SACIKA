@@ -11,6 +11,10 @@ const {
   errorHandler,
   notFoundHandler,
 } = require("./middleware/errorHandler");
+const {
+  requestIdMiddleware,
+  requestLogger,
+} = require("./middleware/requestContext");
 
 const authRoutes = require("./routes/authRoutes");
 const kategoriRoutes = require("./routes/kategoriRoutes");
@@ -18,6 +22,7 @@ const produkRoutes = require("./routes/produkRoutes");
 const transaksiRoutes = require("./routes/transaksiRoutes");
 const datasetRoutes = require("./routes/datasetRoutes");
 const laporanRoutes = require("./routes/laporanRoutes");
+const dashboardRoutes = require("./routes/dashboardRoutes");
 const inventoryHistoryRoutes = require("./routes/inventoryHistoryRoutes");
 const forecastRoutes = require("./routes/forecastRoutes");
 
@@ -42,7 +47,8 @@ function buildCorsOptions(allowedOrigins = getAllowedOrigins()) {
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-Request-ID"],
+    exposedHeaders: ["X-Request-ID"],
     optionsSuccessStatus: 204,
     maxAge: 600,
   };
@@ -53,11 +59,16 @@ function createApp(options = {}) {
   const allowedOrigins = options.allowedOrigins || getAllowedOrigins();
 
   app.disable("x-powered-by");
+  app.set("trust proxy", process.env.TRUST_PROXY || "loopback");
+  app.use(requestIdMiddleware);
+  app.use(requestLogger);
   app.use(helmet({
     crossOriginResourcePolicy: { policy: "cross-origin" },
   }));
   app.use(cors(buildCorsOptions(allowedOrigins)));
-  app.use(express.json({ limit: process.env.JSON_BODY_LIMIT || "1mb" }));
+  const bodyLimit = process.env.JSON_BODY_LIMIT || "1mb";
+  app.use(express.json({ limit: bodyLimit }));
+  app.use(express.urlencoded({ extended: false, limit: bodyLimit }));
 
   app.use("/api", authRoutes);
   app.use("/api/kategori", kategoriRoutes);
@@ -65,6 +76,7 @@ function createApp(options = {}) {
   app.use("/api/transaksi", transaksiRoutes);
   app.use("/api/dataset", datasetRoutes);
   app.use("/api/laporan", laporanRoutes);
+  app.use("/api/dashboard", dashboardRoutes);
   app.use("/api/inventory-history", inventoryHistoryRoutes);
   app.use("/api/forecast", forecastRoutes);
 

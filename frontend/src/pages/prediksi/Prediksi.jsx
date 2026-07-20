@@ -296,7 +296,7 @@ const Prediksi = () => {
   useEffect(() => {
     const fetchProduk = async () => {
       try {
-        const res = await api.get(ENDPOINTS.produk);
+        const res = await api.get(ENDPOINTS.produk, { params: { all: true, status: "active" } });
         setProduk(res.data);
       } catch {
         setStatus("error");

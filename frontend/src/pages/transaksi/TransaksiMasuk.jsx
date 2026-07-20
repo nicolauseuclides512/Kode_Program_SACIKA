@@ -23,17 +23,19 @@ const TransaksiMasuk = () => {
   const [jumlah, setJumlah] = useState("");
   const [tanggal, setTanggal] = useState("");
   const [loading, setLoading] = useState(false);
-  
-  
+  const [search, setSearch] = useState("");
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, total_pages: 1 });
+
+
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [isEditOpen, setIsEditOpen] = useState(false);
   const [isDeleteOpen, setIsDeleteOpen] = useState(false);
-  
-  
+
+
   const [editId, setEditId] = useState(null);
   const [deleteId, setDeleteId] = useState(null);
 
-  
+
   const [toast, setToast] = useState(null);
 
   const productOptions = produk.map((p) => ({
@@ -44,12 +46,16 @@ const TransaksiMasuk = () => {
 
   useEffect(() => {
     fetchProduk();
-    fetchTransaksi();
   }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => fetchTransaksi(), 250);
+    return () => clearTimeout(timer);
+  }, [pagination.page, pagination.limit, search]);
 
   const fetchProduk = async () => {
     try {
-      const res = await api.get(ENDPOINTS.produk);
+      const res = await api.get(ENDPOINTS.produk, { params: { all: true, status: "active" } });
       setProduk(res.data);
     } catch (err) {
       console.error(err);
@@ -58,9 +64,16 @@ const TransaksiMasuk = () => {
 
   const fetchTransaksi = async () => {
     try {
-      const res = await api.get("/transaksi");
-      const filtered = res.data.filter((d) => d.jenis_transaksi === "masuk");
-      setData(filtered);
+      const res = await api.get("/transaksi", {
+        params: {
+          jenis: "masuk",
+          page: pagination.page,
+          limit: pagination.limit,
+          search,
+        },
+      });
+      setData(res.data.data);
+      setPagination((current) => ({ ...current, ...res.data.pagination }));
     } catch (err) {
       console.error(err);
     }
@@ -216,6 +229,11 @@ const TransaksiMasuk = () => {
             searchPlaceholder="Cari riwayat transaksi..."
             searchableFields={["nama_produk"]}
             pageSize={10}
+            serverPagination={pagination}
+            searchTerm={search}
+            onSearchChange={(value) => { setSearch(value); setPagination((current) => ({ ...current, page: 1 })); }}
+            onPageChange={(page) => setPagination((current) => ({ ...current, page }))}
+            onPageSizeChange={(limit) => setPagination((current) => ({ ...current, page: 1, limit }))}
           />
         </CardContent>
       </Card>
@@ -376,10 +394,10 @@ const TransaksiMasuk = () => {
 
       {}
       {toast && (
-        <Toast 
-          message={toast.message} 
-          type={toast.type} 
-          onClose={() => setToast(null)} 
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
         />
       )}
     </div>

@@ -4,11 +4,11 @@ import assert from "node:assert/strict";
 
 const source = fs.readFileSync(new URL("./Dashboard.jsx", import.meta.url), "utf8");
 
-test("Dashboard uses latest inventory-risk endpoint and forecast warning title", () => {
-  assert.match(source, /ENDPOINTS\.inventoryRisk/);
+test("Dashboard uses backend summary endpoint and forecast warning title", () => {
+  assert.match(source, /ENDPOINTS\.dashboardSummary/);
   assert.match(source, /Peringatan Prediksi Persediaan Bulan Berikutnya/);
   assert.match(source, /Belum tersedia hasil prediksi persediaan/);
-  assert.match(source, /forecast_result|forecast_period|forecast_value|model_used|produk_id/);
+  assert.match(source, /forecast_risk|forecast_period|forecast_value|model_used|produk_id/);
 });
 
 test("Dashboard does not present local ARIMA restock or purchase quantity recommendation", () => {
@@ -20,7 +20,7 @@ test("Dashboard does not present local ARIMA restock or purchase quantity recomm
 
 
 test("Dashboard shows forecast freshness and indicative range", () => {
-  assert.match(source, /staleInventoryRisks/);
+  assert.match(source, /stale_count/);
   assert.match(source, /Kedaluwarsa/);
   assert.match(source, /Rentang indikatif/);
   assert.match(source, /lower_bound/);

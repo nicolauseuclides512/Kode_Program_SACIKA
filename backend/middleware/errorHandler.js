@@ -96,6 +96,7 @@ function notFoundHandler(req, res) {
   return res.status(404).json({
     message: "Endpoint tidak ditemukan",
     code: "ROUTE_NOT_FOUND",
+    request_id: req.requestId || null,
   });
 }
 
@@ -109,6 +110,7 @@ function errorHandler(error, req, res, next) { // eslint-disable-line no-unused-
       error_name: error?.name,
       error_code: error?.code,
       message: error?.message,
+      request_id: req.requestId || null,
       stack: process.env.NODE_ENV === "production" ? undefined : error?.stack,
     });
   }
@@ -116,6 +118,7 @@ function errorHandler(error, req, res, next) { // eslint-disable-line no-unused-
   const response = {
     message: normalized.message,
     code: normalized.code,
+    request_id: req.requestId || null,
   };
   if (normalized.details) response.details = normalized.details;
 

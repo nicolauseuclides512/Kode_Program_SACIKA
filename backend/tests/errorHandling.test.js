@@ -47,6 +47,7 @@ test("unknown server errors return a generic response", () => {
   assert.deepEqual(res.body, {
     message: "Terjadi kesalahan pada server",
     code: "INTERNAL_SERVER_ERROR",
+    request_id: null,
   });
 });
 

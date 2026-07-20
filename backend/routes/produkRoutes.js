@@ -11,5 +11,6 @@ router.get("/:id", allowRoles("admin", "staff"), produkController.getProdukById)
 router.post("/", allowRoles("admin"), produkController.tambahProduk);
 router.put("/:id", allowRoles("admin"), produkController.updateProduk);
 router.delete("/:id", allowRoles("admin"), produkController.deleteProduk);
+router.patch("/:id/restore", allowRoles("admin"), produkController.restoreProduk);
 
 module.exports = router;

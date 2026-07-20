@@ -16,7 +16,7 @@ import autoTable from "jspdf-autotable";
 import * as XLSX from "xlsx";
 
 const Report = () => {
-  
+
   const getFirstDayOfMonth = () => {
     const date = new Date();
     const y = date.getFullYear();
@@ -30,14 +30,16 @@ const Report = () => {
 
   const [data, setData] = useState([]);
   const [kategori, setKategori] = useState([]);
-  
-  
+  const [search, setSearch] = useState("");
+  const [pagination, setPagination] = useState({ page: 1, limit: 10, total: 0, total_pages: 1 });
+
+
   const [startDate, setStartDate] = useState(getFirstDayOfMonth());
   const [endDate, setEndDate] = useState(getToday());
   const [jenisTransaksi, setJenisTransaksi] = useState("semua");
   const [kategoriId, setKategoriId] = useState("semua");
 
-  
+
   const [summary, setSummary] = useState({
     totalMasuk: 0,
     totalKeluar: 0,
@@ -45,13 +47,17 @@ const Report = () => {
     nominalKeluar: 0,
   });
 
-  
+
   const [toast, setToast] = useState(null);
 
   useEffect(() => {
     fetchKategori();
-    fetchReport();
   }, []);
+
+  useEffect(() => {
+    const timer = setTimeout(() => fetchReport(), 250);
+    return () => clearTimeout(timer);
+  }, [pagination.page, pagination.limit, search]);
 
   const fetchKategori = async () => {
     try {
@@ -64,15 +70,21 @@ const Report = () => {
 
   const fetchReport = async () => {
     try {
-      const params = {};
+      const params = { page: pagination.page, limit: pagination.limit, search };
       if (startDate) params.start_date = startDate;
       if (endDate) params.end_date = endDate;
       if (jenisTransaksi && jenisTransaksi !== "semua") params.jenis_transaksi = jenisTransaksi;
       if (kategoriId && kategoriId !== "semua") params.kategori_id = kategoriId;
 
       const res = await api.get(ENDPOINTS.laporan, { params });
-      setData(res.data);
-      calculateSummary(res.data);
+      setData(res.data.data);
+      setPagination((current) => ({ ...current, ...res.data.pagination }));
+      setSummary({
+        totalMasuk: Number(res.data.summary.incoming_quantity || 0),
+        totalKeluar: Number(res.data.summary.outgoing_quantity || 0),
+        nominalMasuk: Number(res.data.summary.incoming_value || 0),
+        nominalKeluar: Number(res.data.summary.outgoing_value || 0),
+      });
     } catch (err) {
       console.error(err);
       setToast({ message: "Gagal mengambil data laporan.", type: "error" });
@@ -107,6 +119,7 @@ const Report = () => {
 
   const handleFilter = (e) => {
     e.preventDefault();
+    setPagination((current) => ({ ...current, page: 1 }));
     fetchReport();
   };
 
@@ -117,18 +130,18 @@ const Report = () => {
     }
 
     const doc = new jsPDF();
-    
-    
+
+
     doc.setFontSize(16);
-    doc.setTextColor(24, 24, 27); 
+    doc.setTextColor(24, 24, 27);
     doc.text("Laporan Transaksi Koperasi Sacika", 14, 20);
-    
-    
+
+
     doc.setFontSize(10);
-    doc.setTextColor(113, 113, 122); 
+    doc.setTextColor(113, 113, 122);
     doc.text(`Periode: ${startDate || "-"} s/d ${endDate || "-"}`, 14, 27);
     doc.text(`Jenis Transaksi: ${jenisTransaksi === "semua" ? "Semua" : jenisTransaksi === "masuk" ? "Transaksi Masuk" : "Transaksi Keluar"}`, 14, 33);
-    
+
     let labelKategori = "Semua";
     if (kategoriId !== "semua") {
       const selectedKat = kategori.find(k => String(k.id) === String(kategoriId));
@@ -137,10 +150,10 @@ const Report = () => {
     doc.text(`Kategori Produk: ${labelKategori}`, 14, 39);
     doc.text(`Tanggal Cetak: ${new Date().toLocaleString("id-ID")}`, 14, 45);
 
-    
+
     const tableColumn = ["No", "Tanggal", "Nama Produk", "Kategori", "Tipe", "Jumlah", "Harga", "Total"];
-    
-    
+
+
     const tableRows = data.map((item, idx) => [
       idx + 1,
       item.tanggal ? new Date(item.tanggal).toLocaleDateString("id-ID") : "-",
@@ -152,13 +165,13 @@ const Report = () => {
       `Rp ${Number(item.total).toLocaleString("id-ID")}`
     ]);
 
-    
+
     autoTable(doc, {
       head: [tableColumn],
       body: tableRows,
       startY: 50,
       theme: "striped",
-      headStyles: { fillColor: [220, 38, 38] }, 
+      headStyles: { fillColor: [220, 38, 38] },
       styles: { fontSize: 8, font: "helvetica" },
       columnStyles: {
         0: { cellWidth: 10 },
@@ -168,7 +181,7 @@ const Report = () => {
       }
     });
 
-    
+
     const finalY = doc.lastAutoTable.finalY + 10;
     doc.setFontSize(10);
     doc.setTextColor(24, 24, 27);
@@ -202,7 +215,7 @@ const Report = () => {
     const workbook = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(workbook, worksheet, "Laporan Transaksi");
 
-    
+
     const summaryData = [
       [],
       ["Ringkasan Laporan"],
@@ -214,7 +227,7 @@ const Report = () => {
     ];
     XLSX.utils.sheet_add_aoa(worksheet, summaryData, { origin: -1 });
 
-    
+
     const max_len = formattedData.reduce((prev, next) => {
       Object.keys(next).forEach((key) => {
         const val = next[key] ? next[key].toString() : "";
@@ -255,7 +268,7 @@ const Report = () => {
                 required
               />
             </div>
-            
+
             <div className="grid gap-2">
               <label className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Sampai Tanggal</label>
               <Input
@@ -354,7 +367,7 @@ const Report = () => {
         <CardContent className="p-6">
           <div className="flex items-center justify-between gap-4 mb-4">
             <h3 className="text-sm font-bold text-zinc-900 select-none">Rincian Transaksi</h3>
-            
+
             <div className="flex gap-2">
               <Button type="button" variant="outline" size="sm" onClick={handleExportExcel} className="h-8 text-xs">
                 <FileSpreadsheet className="mr-1.5 h-3.5 w-3.5 text-green-600" /> Export Excel
@@ -404,16 +417,21 @@ const Report = () => {
             searchPlaceholder="Cari transaksi berdasarkan produk atau kategori..."
             searchableFields={["nama_produk", "nama_kategori"]}
             pageSize={10}
+            serverPagination={pagination}
+            searchTerm={search}
+            onSearchChange={(value) => { setSearch(value); setPagination((current) => ({ ...current, page: 1 })); }}
+            onPageChange={(page) => setPagination((current) => ({ ...current, page }))}
+            onPageSizeChange={(limit) => setPagination((current) => ({ ...current, page: 1, limit }))}
           />
         </CardContent>
       </Card>
 
       {}
       {toast && (
-        <Toast 
-          message={toast.message} 
-          type={toast.type} 
-          onClose={() => setToast(null)} 
+        <Toast
+          message={toast.message}
+          type={toast.type}
+          onClose={() => setToast(null)}
         />
       )}
     </div>
