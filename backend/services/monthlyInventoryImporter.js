@@ -21,6 +21,7 @@ const MONTH_ALIASES = {
   jul: 7,
   agustus: 8,
   agst: 8,
+  agsts: 8,
   agu: 8,
   september: 9,
   sept: 9,
@@ -58,18 +59,27 @@ function createExpectedPeriods(startYear = 2024, endYear = 2025) {
 
 function parseSheetPeriod(sheetName) {
   const normalized = normalizeProductName(sheetName);
-  const yearMatch = normalized.match(/\b(20\d{2})\b/);
-  if (!yearMatch) return null;
+  const fullYearMatch = normalized.match(/\b(20\d{2})\b/);
+  const shortYearMatch = normalized.match(/\b(\d{2})\b/);
+  const year = fullYearMatch
+    ? Number(fullYearMatch[1])
+    : shortYearMatch
+      ? 2000 + Number(shortYearMatch[1])
+      : null;
+
+  if (!year) return null;
 
   const tokens = normalized.split(" ");
   const monthToken = tokens.find((token) => MONTH_ALIASES[token]);
   if (!monthToken) return null;
 
-  return toPeriodDate(Number(yearMatch[1]), MONTH_ALIASES[monthToken]);
+  return toPeriodDate(year, MONTH_ALIASES[monthToken]);
 }
 
 function normalizeHeader(value) {
-  return normalizeProductName(value).replace(/\brata rata\b/g, "rata rata");
+  return normalizeProductName(value)
+    .replace(/\brata\s*2\b/g, "rata rata")
+    .replace(/\basset\b/g, "aset");
 }
 
 function parseNumber(value) {
@@ -119,25 +129,44 @@ function readRowsFromSheet(sheet, periode, sheetName) {
     raw: true,
   });
 
-  const header = findHeaderRow(rows);
-  if (!header) {
-    throw new Error(`Kolom wajib tidak ditemukan pada sheet ${sheetName}`);
-  }
-
+  let activeHeader = null;
+  let activeCategory = null;
   const output = [];
 
-  for (let index = header.rowIndex + 1; index < rows.length; index += 1) {
+  for (let index = 0; index < rows.length; index += 1) {
     const row = rows[index];
-    const namaBarang = row[header.columnIndexes.namaBarang];
+    const firstCellText = String(row[0] || "").trim();
+    const normalizedFirstCell = normalizeProductName(firstCellText);
+    if (normalizedFirstCell.startsWith("jenis ")) {
+      activeCategory = firstCellText.replace(/^jenis\s*:\s*/i, "").trim() || null;
+    }
+
+    const header = findHeaderRow([row]);
+
+    if (header) {
+      activeHeader = header.columnIndexes;
+      continue;
+    }
+
+    if (!activeHeader) continue;
+
+    const sequenceIndex = Math.max(0, activeHeader.namaBarang - 1);
+    const sequenceValue = row[sequenceIndex];
+    const isProductRow = activeHeader.namaBarang === 0
+      || typeof sequenceValue === "number"
+      || /^\d+$/.test(String(sequenceValue || "").trim());
+    if (!isProductRow) continue;
+
+    const namaBarang = row[activeHeader.namaBarang];
     const namaBarangSumber = namaBarang === null || namaBarang === undefined
       ? ""
       : String(namaBarang).trim();
 
     if (!namaBarangSumber) continue;
 
-    const stokAkhir = parseNumber(row[header.columnIndexes.jml]);
-    const hargaRataRata = parseNumber(row[header.columnIndexes.hargaRataRata]);
-    const nilaiAset = parseNumber(row[header.columnIndexes.nilaiAset]);
+    const stokAkhir = parseNumber(row[activeHeader.jml]);
+    const hargaRataRata = parseNumber(row[activeHeader.hargaRataRata]);
+    const nilaiAset = parseNumber(row[activeHeader.nilaiAset]);
 
     output.push({
       sheetName,
@@ -145,10 +174,15 @@ function readRowsFromSheet(sheet, periode, sheetName) {
       periode,
       nama_barang_sumber: namaBarangSumber,
       nama_normalisasi: normalizeProductName(namaBarangSumber),
+      kategori_sumber: activeCategory,
       stok_akhir: stokAkhir,
       harga_rata_rata: hargaRataRata,
       nilai_aset: nilaiAset,
     });
+  }
+
+  if (!activeHeader) {
+    throw new Error(`Kolom wajib tidak ditemukan pada sheet ${sheetName}`);
   }
 
   return output;
@@ -193,6 +227,28 @@ function readMonthlyInventoryWorkbook(filePath, options = {}) {
   };
 }
 
+function normalizePeriodDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
+
+function isProductActiveForPeriod(product, periode) {
+  const period = normalizePeriodDate(periode);
+  const activeFrom = normalizePeriodDate(product.active_from);
+  const activeUntil = normalizePeriodDate(product.active_until);
+
+  if (activeFrom && period < activeFrom) return false;
+  if (activeUntil && period > activeUntil) return false;
+  return true;
+}
+
+function classifyAbsentProductStatus(product, periode) {
+  return isProductActiveForPeriod(product, periode)
+    ? "not_listed"
+    : "not_active";
+}
+
 function buildAliasMap(aliasRows) {
   const aliasMap = new Map();
 
@@ -200,8 +256,11 @@ function buildAliasMap(aliasRows) {
     const key = normalizeProductName(row.nama_normalisasi);
     if (key) {
       aliasMap.set(key, {
-        produk_id: row.produk_id,
+        produk_id: Number(row.produk_id),
         nama_produk: row.nama_produk || null,
+        is_active: row.is_active !== false,
+        active_from: normalizePeriodDate(row.active_from),
+        active_until: normalizePeriodDate(row.active_until),
       });
     }
   }
@@ -209,26 +268,25 @@ function buildAliasMap(aliasRows) {
   return aliasMap;
 }
 
+function choosePreferredSnapshot(previous, candidate) {
+  if (!previous) return candidate;
+  if (previous.status_data === "missing" && candidate.status_data === "observed") {
+    return candidate;
+  }
+  if (previous.status_data === "observed" && candidate.status_data === "missing") {
+    return previous;
+  }
+  return candidate;
+}
+
 function buildImportPlan(parsedWorkbook, aliasRows, productRows) {
   const aliasMap = buildAliasMap(aliasRows);
-  const observedSnapshots = [];
   const unresolvedProducts = [];
-  const seenByPeriod = new Map();
   const duplicateObserved = [];
+  const lifecycleConflicts = [];
+  const snapshotsByPeriod = new Map();
 
   for (const row of parsedWorkbook.rows) {
-    if (row.stok_akhir === null || row.stok_akhir < 0) {
-      unresolvedProducts.push({
-        sheet_name: row.sheetName,
-        row_number: row.rowNumber,
-        periode: row.periode,
-        nama_barang_sumber: row.nama_barang_sumber,
-        nama_normalisasi: row.nama_normalisasi,
-        reason: "invalid_jml",
-      });
-      continue;
-    }
-
     const alias = aliasMap.get(row.nama_normalisasi);
     if (!alias) {
       unresolvedProducts.push({
@@ -237,71 +295,138 @@ function buildImportPlan(parsedWorkbook, aliasRows, productRows) {
         periode: row.periode,
         nama_barang_sumber: row.nama_barang_sumber,
         nama_normalisasi: row.nama_normalisasi,
+        issue_type: "unresolved",
         reason: "alias_not_found",
       });
       continue;
     }
 
-    const periodMap = seenByPeriod.get(row.periode) || new Map();
-    const previous = periodMap.get(alias.produk_id);
+    const productPeriodMap = snapshotsByPeriod.get(row.periode) || new Map();
+    const previous = productPeriodMap.get(alias.produk_id);
+
     if (previous) {
       duplicateObserved.push({
+        sheet_name: row.sheetName,
         periode: row.periode,
         produk_id: alias.produk_id,
         first_row_number: previous.rowNumber,
         duplicate_row_number: row.rowNumber,
         nama_barang_sumber: row.nama_barang_sumber,
+        nama_normalisasi: row.nama_normalisasi,
+        issue_type: "collision",
+        reason: "duplicate_product_in_same_period",
       });
     }
-    periodMap.set(alias.produk_id, row);
-    seenByPeriod.set(row.periode, periodMap);
 
-    observedSnapshots.push({
+    const invalidStock = row.stok_akhir === null || row.stok_akhir < 0;
+    const snapshot = {
       produk_id: alias.produk_id,
       periode: row.periode,
-      stok_akhir: row.stok_akhir,
+      stok_akhir: invalidStock ? null : row.stok_akhir,
       harga_rata_rata: row.harga_rata_rata,
       nilai_aset: row.nilai_aset,
       nama_barang_sumber: row.nama_barang_sumber,
       sumber_file: parsedWorkbook.sourceFile,
-      status_data: "observed",
-    });
+      status_data: invalidStock ? "missing" : "observed",
+      rowNumber: row.rowNumber,
+    };
+
+    if (invalidStock) {
+      unresolvedProducts.push({
+        sheet_name: row.sheetName,
+        row_number: row.rowNumber,
+        periode: row.periode,
+        produk_id: alias.produk_id,
+        nama_barang_sumber: row.nama_barang_sumber,
+        nama_normalisasi: row.nama_normalisasi,
+        issue_type: "invalid_jml",
+        reason: "invalid_jml",
+      });
+    }
+
+    if (!isProductActiveForPeriod(alias, row.periode)) {
+      lifecycleConflicts.push({
+        sheet_name: row.sheetName,
+        row_number: row.rowNumber,
+        periode: row.periode,
+        produk_id: alias.produk_id,
+        nama_barang_sumber: row.nama_barang_sumber,
+        nama_normalisasi: row.nama_normalisasi,
+        issue_type: "lifecycle_conflict",
+        reason: "source_row_outside_active_period",
+        active_from: alias.active_from,
+        active_until: alias.active_until,
+      });
+    }
+
+    productPeriodMap.set(
+      alias.produk_id,
+      choosePreferredSnapshot(previous, snapshot),
+    );
+    snapshotsByPeriod.set(row.periode, productPeriodMap);
   }
 
+  const observedSnapshots = [];
   const missingSnapshots = [];
+
   for (const periode of parsedWorkbook.periods) {
-    const observedProductIds = seenByPeriod.get(periode) || new Map();
+    const productPeriodMap = snapshotsByPeriod.get(periode) || new Map();
 
     for (const product of productRows) {
-      if (!observedProductIds.has(product.id)) {
-        missingSnapshots.push({
-          produk_id: product.id,
-          periode,
-          stok_akhir: null,
-          harga_rata_rata: null,
-          nilai_aset: null,
-          nama_barang_sumber: null,
-          sumber_file: parsedWorkbook.sourceFile,
-          status_data: "missing",
-        });
+      const existingSnapshot = productPeriodMap.get(Number(product.id));
+      if (existingSnapshot) {
+        const { rowNumber, ...snapshot } = existingSnapshot;
+        observedSnapshots.push(snapshot);
+        continue;
       }
+
+      missingSnapshots.push({
+        produk_id: Number(product.id),
+        periode,
+        stok_akhir: null,
+        harga_rata_rata: null,
+        nilai_aset: null,
+        nama_barang_sumber: null,
+        sumber_file: parsedWorkbook.sourceFile,
+        status_data: classifyAbsentProductStatus(product, periode),
+      });
     }
   }
+
+  const statusCounts = [...observedSnapshots, ...missingSnapshots].reduce(
+    (counts, snapshot) => {
+      counts[snapshot.status_data] = (counts[snapshot.status_data] || 0) + 1;
+      return counts;
+    },
+    {},
+  );
+  const failedSourceRowKeys = new Set(
+    unresolvedProducts.map((issue) => `${issue.sheet_name}|${issue.row_number}`),
+  );
+  const successfulRows = Math.max(0, parsedWorkbook.rows.length - failedSourceRowKeys.size);
 
   return {
     observedSnapshots,
     missingSnapshots,
     unresolvedProducts,
     duplicateObserved,
+    lifecycleConflicts,
     summary: {
       file: parsedWorkbook.sourceFile,
       sheets: parsedWorkbook.sheetCount,
       periods: parsedWorkbook.periods.length,
       rows: parsedWorkbook.rows.length,
-      matchedProducts: observedSnapshots.length,
+      matchedProducts: observedSnapshots.filter(
+        (snapshot) => snapshot.status_data === "observed" || snapshot.status_data === "corrected",
+      ).length,
+      mappedSnapshots: observedSnapshots.length,
+      successfulRows,
+      failedRows: failedSourceRowKeys.size,
       unresolvedProducts: unresolvedProducts.length,
       missingSnapshots: missingSnapshots.length,
       duplicateObserved: duplicateObserved.length,
+      lifecycleConflicts: lifecycleConflicts.length,
+      statusCounts,
     },
   };
 }
@@ -309,7 +434,12 @@ function buildImportPlan(parsedWorkbook, aliasRows, productRows) {
 async function loadProductAliases(db) {
   const result = await db.query(
     `
-      SELECT pa.produk_id, pa.nama_normalisasi, p.nama_produk
+      SELECT pa.produk_id,
+             pa.nama_normalisasi,
+             p.nama_produk,
+             p.is_active,
+             p.active_from,
+             p.active_until
       FROM product_alias pa
       JOIN produk p ON p.id = pa.produk_id
     `,
@@ -319,7 +449,13 @@ async function loadProductAliases(db) {
 }
 
 async function loadProducts(db) {
-  const result = await db.query("SELECT id, nama_produk FROM produk ORDER BY id");
+  const result = await db.query(
+    `
+      SELECT id, nama_produk, is_active, active_from, active_until
+      FROM produk
+      ORDER BY id
+    `,
+  );
   return result.rows;
 }
 
@@ -401,6 +537,35 @@ function writeUnresolvedReport(unresolvedProducts, outputPath, format = "json") 
   return outputPath;
 }
 
+async function insertMappingIssue(client, issue, sourceFile) {
+  await client.query(
+    `
+      INSERT INTO product_mapping_issue (
+        sumber_file,
+        sheet_name,
+        row_number,
+        periode,
+        nama_barang_sumber,
+        nama_normalisasi,
+        issue_type,
+        detail
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+      ON CONFLICT DO NOTHING
+    `,
+    [
+      sourceFile,
+      issue.sheet_name || null,
+      issue.row_number || null,
+      issue.periode || null,
+      issue.nama_barang_sumber || null,
+      issue.nama_normalisasi || null,
+      issue.issue_type || "unresolved",
+      JSON.stringify(issue),
+    ],
+  );
+}
+
 async function createImportBatch(client, parsedWorkbook, plan) {
   const status = plan.unresolvedProducts.length > 0 ? "partial" : "processing";
   const result = await client.query(
@@ -419,13 +584,15 @@ async function createImportBatch(client, parsedWorkbook, plan) {
     [
       parsedWorkbook.sourceFile,
       plan.summary.rows,
-      plan.summary.matchedProducts,
-      plan.summary.unresolvedProducts,
+      plan.summary.successfulRows,
+      plan.summary.failedRows,
       status,
       JSON.stringify({
         unresolved_products: plan.unresolvedProducts,
         duplicate_observed: plan.duplicateObserved,
+        lifecycle_conflicts: plan.lifecycleConflicts,
         missing_snapshots: plan.summary.missingSnapshots,
+        status_counts: plan.summary.statusCounts,
       }),
     ],
   );
@@ -445,99 +612,6 @@ async function updateImportBatchStatus(client, batchId, status, detail) {
   );
 }
 
-function formatPeriodValue(value) {
-  if (!value) return null;
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
-
-  const text = String(value);
-  return text.includes("T") ? text.slice(0, 10) : text.slice(0, 10);
-}
-
-function toInteger(value) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function classifyImportQualityRow(row, expectedPeriodCount) {
-  const observationCount = toInteger(row.observation_count);
-  const zeroCount = toInteger(row.zero_count);
-  const missingCount = Math.max(expectedPeriodCount - observationCount, 0);
-  const zeroRatio = observationCount > 0 ? zeroCount / observationCount : 0;
-
-  if (observationCount < 18) return "not_eligible";
-  if (missingCount > 0 || zeroRatio >= 0.5) return "warning";
-  return "eligible";
-}
-
-async function getInventoryImportValidationSummary(db, options = {}) {
-  const expectedPeriods = options.expectedPeriods || createExpectedPeriods();
-  const expectedPeriodCount = expectedPeriods.length;
-
-  const productCountResult = await db.query("SELECT COUNT(*)::int AS jumlah FROM produk");
-  const aliasCountResult = await db.query("SELECT COUNT(*)::int AS jumlah FROM product_alias");
-  const snapshotCountResult = await db.query(
-    `
-      SELECT
-        COUNT(*) FILTER (WHERE status_data = 'observed')::int AS observed_count,
-        COUNT(*) FILTER (WHERE status_data = 'missing')::int AS missing_count
-      FROM inventory_snapshot_monthly
-    `,
-  );
-  const periodRangeResult = await db.query(
-    `
-      SELECT MIN(periode)::date AS periode_min,
-             MAX(periode)::date AS periode_max
-      FROM inventory_snapshot_monthly
-    `,
-  );
-  const qualityRowsResult = await db.query(
-    `
-      SELECT
-        p.id,
-        COUNT(DISTINCT CASE
-          WHEN ism.status_data IN ('observed', 'corrected')
-            AND ism.stok_akhir IS NOT NULL
-          THEN ism.periode
-        END)::int AS observation_count,
-        COUNT(DISTINCT CASE
-          WHEN ism.status_data IN ('observed', 'corrected')
-            AND ism.stok_akhir = 0
-          THEN ism.periode
-        END)::int AS zero_count
-      FROM produk p
-      LEFT JOIN inventory_snapshot_monthly ism
-        ON ism.produk_id = p.id
-      GROUP BY p.id
-      ORDER BY p.id
-    `,
-  );
-
-  const statusCounts = {
-    eligible: 0,
-    warning: 0,
-    not_eligible: 0,
-  };
-
-  for (const row of qualityRowsResult.rows) {
-    statusCounts[classifyImportQualityRow(row, expectedPeriodCount)] += 1;
-  }
-
-  const snapshotCounts = snapshotCountResult.rows[0] || {};
-  const periodRange = periodRangeResult.rows[0] || {};
-
-  return {
-    product_count: toInteger(productCountResult.rows[0]?.jumlah),
-    alias_count: toInteger(aliasCountResult.rows[0]?.jumlah),
-    observed_snapshot_count: toInteger(snapshotCounts.observed_count),
-    missing_snapshot_count: toInteger(snapshotCounts.missing_count),
-    unresolved_count: toInteger(options.unresolvedCount),
-    periode_min: formatPeriodValue(periodRange.periode_min),
-    periode_max: formatPeriodValue(periodRange.periode_max),
-    eligible_count: statusCounts.eligible,
-    warning_count: statusCounts.warning,
-    not_eligible_count: statusCounts.not_eligible,
-  };
-}
 async function importMonthlyInventory(db, filePath, options = {}) {
   const parsedWorkbook = readMonthlyInventoryWorkbook(filePath, options);
   const aliasRows = await loadProductAliases(db);
@@ -548,10 +622,6 @@ async function importMonthlyInventory(db, filePath, options = {}) {
     options.unresolvedOutputPath,
     options.unresolvedFormat || "json",
   );
-  const details = {
-    unresolved_products: plan.unresolvedProducts,
-    duplicate_observed: plan.duplicateObserved,
-  };
 
   if (options.dryRun) {
     return {
@@ -559,17 +629,14 @@ async function importMonthlyInventory(db, filePath, options = {}) {
       saved: false,
       unresolvedReportPath,
       ...plan.summary,
-      periodsVerified: parsedWorkbook.periods.length,
-      details,
     };
   }
 
   const client = await db.connect();
-  let batchId = null;
 
   try {
     await client.query("BEGIN");
-    batchId = await createImportBatch(client, parsedWorkbook, plan);
+    const batchId = await createImportBatch(client, parsedWorkbook, plan);
 
     for (const snapshot of plan.observedSnapshots) {
       await upsertSnapshot(client, snapshot);
@@ -579,14 +646,36 @@ async function importMonthlyInventory(db, filePath, options = {}) {
       await upsertSnapshot(client, snapshot);
     }
 
+    for (const issue of plan.unresolvedProducts) {
+      await insertMappingIssue(client, issue, parsedWorkbook.sourceFile);
+    }
+
+    for (const issue of plan.duplicateObserved) {
+      await insertMappingIssue(client, issue, parsedWorkbook.sourceFile);
+    }
+
+    for (const issue of plan.lifecycleConflicts) {
+      await insertMappingIssue(client, issue, parsedWorkbook.sourceFile);
+    }
+
     const finalStatus = plan.unresolvedProducts.length > 0 ? "partial" : "success";
     await updateImportBatchStatus(client, batchId, finalStatus, {
       unresolved_products: plan.unresolvedProducts,
       duplicate_observed: plan.duplicateObserved,
+      lifecycle_conflicts: plan.lifecycleConflicts,
       missing_snapshots: plan.summary.missingSnapshots,
+      status_counts: plan.summary.statusCounts,
       unresolved_report_path: unresolvedReportPath,
     });
     await client.query("COMMIT");
+
+    return {
+      dryRun: false,
+      saved: true,
+      importBatchId: batchId,
+      unresolvedReportPath,
+      ...plan.summary,
+    };
   } catch (error) {
     await client.query("ROLLBACK");
 
@@ -614,32 +703,17 @@ async function importMonthlyInventory(db, filePath, options = {}) {
   } finally {
     client.release();
   }
-
-  const postImportValidation = await getInventoryImportValidationSummary(db, {
-    expectedPeriods: parsedWorkbook.periods,
-    unresolvedCount: plan.summary.unresolvedProducts,
-  });
-
-  return {
-    dryRun: false,
-    saved: true,
-    importBatchId: batchId,
-    unresolvedReportPath,
-    ...plan.summary,
-    periodsVerified: parsedWorkbook.periods.length,
-    details,
-    postImportValidation,
-  };
 }
+
 module.exports = {
   createExpectedPeriods,
   parseNumber,
   parseSheetPeriod,
   readMonthlyInventoryWorkbook,
   buildImportPlan,
-  getInventoryImportValidationSummary,
+  classifyAbsentProductStatus,
   importMonthlyInventory,
+  isProductActiveForPeriod,
   toUnresolvedCsv,
   writeUnresolvedReport,
 };
-

@@ -1,20 +1,12 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
 const db = require("../config/database");
+const { getJwtSecret } = require("../config/security");
 
 function normalizeUsername(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function getJwtSecret() {
-  const secret = process.env.JWT_SECRET?.trim();
-
-  if (!secret) {
-    throw new Error("JWT_SECRET belum diatur pada environment backend.");
-  }
-
-  return secret;
-}
 
 exports.login = async (req, res) => {
   const username = normalizeUsername(req.body?.username);
@@ -38,6 +30,7 @@ exports.login = async (req, res) => {
     );
 
     if (result.rows.length === 0) {
+      req.loginRateLimit?.recordFailure();
       return res.status(401).json({
         message: "Username atau password salah",
       });
@@ -46,6 +39,7 @@ exports.login = async (req, res) => {
     const user = result.rows[0];
 
     if (!user.is_active) {
+      req.loginRateLimit?.recordFailure();
       return res.status(403).json({
         message: "Akun tidak aktif. Hubungi administrator.",
       });
@@ -54,6 +48,7 @@ exports.login = async (req, res) => {
     const passwordMatches = await bcrypt.compare(password, user.password_hash);
 
     if (!passwordMatches) {
+      req.loginRateLimit?.recordFailure();
       return res.status(401).json({
         message: "Username atau password salah",
       });
@@ -72,6 +67,8 @@ exports.login = async (req, res) => {
         audience: "sacika-frontend",
       },
     );
+
+    req.loginRateLimit?.reset();
 
     return res.json({
       message: "Login berhasil",

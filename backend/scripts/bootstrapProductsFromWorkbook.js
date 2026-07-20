@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 
+require("dotenv").config({ path: `${__dirname}/../.env` });
+
+const fs = require("fs");
 const path = require("path");
 
-const {
-  createPoolFromEnv,
-  loadBackendEnv,
-  sanitizeMessage,
-} = require("./migrationRunner");
+const db = require("../config/database");
 const {
   bootstrapProductsFromWorkbook,
 } = require("../services/productCatalogBootstrapService");
@@ -17,72 +16,63 @@ function readOption(args, name) {
 
   const index = args.indexOf(name);
   if (index >= 0 && args[index + 1]) return args[index + 1];
-
   return "";
+}
+
+function loadCategoryMap(categoryMapPath) {
+  if (!categoryMapPath) return {};
+
+  const absolutePath = path.resolve(categoryMapPath);
+  const parsed = JSON.parse(fs.readFileSync(absolutePath, "utf8"));
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("File category map harus berupa object JSON.");
+  }
+
+  return parsed;
 }
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const filePath = readOption(args, "--file") || process.env.PRODUCT_BOOTSTRAP_FILE;
+  const filePath = readOption(args, "--file")
+    || process.env.IMPORT_FILE_PATH
+    || process.env.INVENTORY_IMPORT_FILE;
   const commit = args.includes("--commit");
-  const dryRun = args.includes("--dry-run") || !commit;
-  const reportFormat = readOption(args, "--report-format") || "json";
-  const reportOutputPath = readOption(args, "--report-output")
-    || path.resolve(process.cwd(), `bootstrap-products-report.${reportFormat}`);
-  const categoryMapPath = readOption(args, "--category-map") || "";
+  const explicitDryRun = args.includes("--dry-run");
+
+  if (commit && explicitDryRun) {
+    throw new Error("Gunakan salah satu --commit atau --dry-run, bukan keduanya.");
+  }
+
+  const outputPath = readOption(args, "--output")
+    || process.env.PRODUCT_BOOTSTRAP_REPORT
+    || path.resolve(process.cwd(), "product-bootstrap-report.json");
+  const categoryMapPath = readOption(args, "--category-map");
 
   return {
     filePath,
     commit,
-    dryRun,
-    reportFormat,
-    reportOutputPath,
-    categoryMapPath,
+    outputPath,
+    categoryMap: loadCategoryMap(categoryMapPath),
   };
 }
 
 async function main() {
-  loadBackendEnv();
   const options = parseArgs(process.argv);
 
   if (!options.filePath) {
-    throw new Error("Path file wajib diisi: gunakan --file <path>");
+    throw new Error("Path workbook wajib diisi melalui --file <path>.");
   }
 
-  if (options.dryRun && !options.commit) {
-    console.log("Mode dry-run: database tidak diubah.");
-  }
-
-  const pool = createPoolFromEnv();
-
-  try {
-    const result = await bootstrapProductsFromWorkbook(pool, options.filePath, {
-      commit: options.commit,
-      categoryMapPath: options.categoryMapPath,
-      reportFormat: options.reportFormat,
-      reportOutputPath: options.reportOutputPath,
-    });
-
-    console.log(JSON.stringify({
-      mode: result.mode,
-      summary: result.summary,
-      created_products: result.created_products.length,
-      created_aliases: result.created_aliases.length,
-      report_path: result.report_path,
-    }, null, 2));
-  } finally {
-    await pool.end();
-  }
+  const result = await bootstrapProductsFromWorkbook(db, options.filePath, options);
+  console.log(JSON.stringify(result, null, 2));
 }
 
-if (require.main === module) {
-  main().catch((error) => {
-    console.error(sanitizeMessage(error.message));
+main()
+  .catch((error) => {
+    console.error(error.message);
     process.exitCode = 1;
+  })
+  .finally(async () => {
+    await db.end();
   });
-}
-
-module.exports = {
-  main,
-  parseArgs,
-};

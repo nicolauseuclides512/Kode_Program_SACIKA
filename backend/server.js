@@ -2,6 +2,7 @@ require("dotenv").config({ path: __dirname + "/.env" });
 
 const express = require("express");
 const cors = require("cors");
+const { validateRuntimeEnvironment } = require("./config/security");
 
 const authRoutes = require("./routes/authRoutes");
 const kategoriRoutes = require("./routes/kategoriRoutes");
@@ -12,22 +13,6 @@ const laporanRoutes = require("./routes/laporanRoutes");
 const inventoryHistoryRoutes = require("./routes/inventoryHistoryRoutes");
 const forecastRoutes = require("./routes/forecastRoutes");
 
-function validateRuntimeEnvironment() {
-  const requiredVariables = ["DATABASE_URL", "JWT_SECRET"];
-  const missing = requiredVariables.filter(
-    (variableName) => !process.env[variableName]?.trim(),
-  );
-
-  if (missing.length > 0) {
-    throw new Error(
-      `Environment backend belum lengkap: ${missing.join(", ")}`,
-    );
-  }
-
-  if (process.env.JWT_SECRET.trim().length < 32) {
-    throw new Error("JWT_SECRET minimal 32 karakter.");
-  }
-}
 
 function getAllowedOrigins() {
   const configuredOrigins = process.env.CORS_ALLOWED_ORIGINS

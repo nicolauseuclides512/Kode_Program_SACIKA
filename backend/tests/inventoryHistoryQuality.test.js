@@ -293,3 +293,57 @@ test("inventory history controller returns monthly history response", async () =
   assert.deepEqual(res.body.periods, ["2024-01"]);
   assert.deepEqual(res.body.values, [10]);
 });
+
+test("calculateProductQuality excludes months before active_from and reports not_listed separately", () => {
+  const product = {
+    id: 10,
+    nama_produk: "Produk Baru",
+    is_active: true,
+    active_from: "2024-03-01",
+    active_until: null,
+  };
+  const rows = [
+    { periode: "2024-01-01", stok_akhir: null, status_data: "not_active" },
+    { periode: "2024-02-01", stok_akhir: null, status_data: "not_active" },
+    { periode: "2024-03-01", stok_akhir: 5, status_data: "observed" },
+    { periode: "2024-04-01", stok_akhir: null, status_data: "not_listed" },
+  ];
+
+  const quality = calculateProductQuality(product, rows, [], {
+    expectedPeriods: [
+      "2024-01-01",
+      "2024-02-01",
+      "2024-03-01",
+      "2024-04-01",
+    ],
+    minObservationCount: 1,
+  });
+
+  assert.equal(quality.expected_period_count, 2);
+  assert.equal(quality.missing_month_count, 0);
+  assert.equal(quality.not_listed_month_count, 1);
+  assert.equal(quality.not_active_month_count, 2);
+  assert.equal(quality.status, "warning");
+});
+
+test("calculateProductQuality marks inactive product as not eligible", () => {
+  const quality = calculateProductQuality(
+    {
+      id: 11,
+      nama_produk: "Produk Lama",
+      is_active: false,
+      active_from: "2024-01-01",
+      active_until: "2024-02-01",
+    },
+    [
+      { periode: "2024-01-01", stok_akhir: 5, status_data: "observed" },
+      { periode: "2024-02-01", stok_akhir: 4, status_data: "observed" },
+    ],
+    [],
+    { minObservationCount: 2 },
+  );
+
+  assert.equal(quality.eligible, false);
+  assert.equal(quality.status, "not_eligible");
+  assert.ok(quality.messages.includes("Produk berstatus tidak aktif"));
+});

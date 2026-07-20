@@ -2,6 +2,8 @@ const { createExpectedPeriods } = require("./monthlyInventoryImporter");
 
 const DEFAULT_MIN_OBSERVATION_COUNT = 18;
 const DEFAULT_HIGH_ZERO_RATIO_THRESHOLD = 0.5;
+const VALID_OBSERVATION_STATUSES = new Set(["observed", "corrected"]);
+const NULL_VALUE_STATUSES = new Set(["missing", "not_listed", "not_active"]);
 
 function formatPeriod(value) {
   if (!value) return null;
@@ -93,7 +95,7 @@ function buildInventoryHistoryResponse(product, rows, filters = {}) {
 
   for (const periode of monthRange) {
     const row = rowByPeriod.get(periode);
-    const isMissing = !row || row.status_data === "missing" || row.stok_akhir === null;
+    const isMissing = !row || NULL_VALUE_STATUSES.has(row.status_data) || row.stok_akhir === null;
 
     periods.push(formatMonth(periode));
     values.push(isMissing ? null : row.stok_akhir);
@@ -151,7 +153,7 @@ function getLatestValidObservationByPeriod(rows = []) {
     const stokAkhir = toNumberOrNull(row.stok_akhir);
     const statusData = row.status_data || "observed";
 
-    if (!periode || statusData === "missing" || stokAkhir === null) continue;
+    if (!periode || !VALID_OBSERVATION_STATUSES.has(statusData) || stokAkhir === null) continue;
 
     byPeriod.set(periode, {
       ...row,
@@ -176,15 +178,75 @@ function countStockChanges(observations) {
   return changes;
 }
 
+function normalizeLifecyclePeriod(value) {
+  return formatPeriod(value);
+}
+
+function filterPeriodsByLifecycle(periods, product = {}) {
+  const activeFrom = normalizeLifecyclePeriod(product.active_from);
+  const activeUntil = normalizeLifecyclePeriod(product.active_until);
+
+  return periods.filter((periode) => {
+    if (activeFrom && periode < activeFrom) return false;
+    if (activeUntil && periode > activeUntil) return false;
+    return true;
+  });
+}
+
+function deriveExpectedPeriods(product, rows, options = {}) {
+  if (Array.isArray(options.expectedPeriods)) {
+    return filterPeriodsByLifecycle(options.expectedPeriods, product);
+  }
+
+  const normalizedPeriods = rows
+    .map((row) => formatPeriod(row.periode))
+    .filter(Boolean)
+    .sort();
+  const activeFrom = normalizeLifecyclePeriod(product.active_from);
+  const activeUntil = normalizeLifecyclePeriod(product.active_until);
+  const startPeriod = activeFrom || normalizedPeriods[0] || null;
+  const endPeriod = activeUntil
+    || normalizedPeriods[normalizedPeriods.length - 1]
+    || null;
+
+  if (!startPeriod || !endPeriod || startPeriod > endPeriod) return [];
+  return createMonthRange(startPeriod, endPeriod);
+}
+
+function countStatusPeriods(rows, status) {
+  const periods = new Set();
+
+  for (const row of rows) {
+    if ((row.status_data || "observed") === status) {
+      const periode = formatPeriod(row.periode);
+      if (periode) periods.add(periode);
+    }
+  }
+
+  return [...periods].sort();
+}
+
 function calculateProductQuality(product, rows = [], duplicatePeriods = [], options = {}) {
-  const expectedPeriods = options.expectedPeriods || createExpectedPeriods();
+  const expectedPeriods = deriveExpectedPeriods(product, rows, options);
   const minObservationCount = options.minObservationCount || DEFAULT_MIN_OBSERVATION_COUNT;
   const highZeroRatioThreshold = options.highZeroRatioThreshold
     ?? DEFAULT_HIGH_ZERO_RATIO_THRESHOLD;
 
   const validObservations = getLatestValidObservationByPeriod(rows);
   const observedPeriodSet = new Set(validObservations.map((row) => row.periode));
-  const missingMonths = expectedPeriods.filter((periode) => !observedPeriodSet.has(periode));
+  const explicitMissingMonths = countStatusPeriods(rows, "missing");
+  const notListedMonths = countStatusPeriods(rows, "not_listed");
+  const notActiveMonths = countStatusPeriods(rows, "not_active");
+  const rowPeriodSet = new Set(
+    rows.map((row) => formatPeriod(row.periode)).filter(Boolean),
+  );
+  const implicitMissingMonths = expectedPeriods.filter(
+    (periode) => !rowPeriodSet.has(periode),
+  );
+  const missingMonths = [...new Set([
+    ...explicitMissingMonths.filter((period) => expectedPeriods.includes(period)),
+    ...implicitMissingMonths,
+  ])].sort();
   const values = validObservations.map((row) => row.stok_akhir);
 
   const observationCount = validObservations.length;
@@ -200,12 +262,20 @@ function calculateProductQuality(product, rows = [], duplicatePeriods = [], opti
   const normalizedDuplicatePeriods = normalizeDuplicatePeriods(duplicatePeriods);
   const hasDuplicatePeriods = normalizedDuplicatePeriods.length > 0;
   const messages = [];
+  const productIsActive = product.is_active !== false;
   let status = "eligible";
 
-  if (observationCount < minObservationCount) {
+  if (!productIsActive) {
+    status = "not_eligible";
+    messages.push("Produk berstatus tidak aktif");
+  } else if (observationCount < minObservationCount) {
     status = "not_eligible";
     messages.push(`Observasi valid kurang dari ${minObservationCount} bulan`);
-  } else if (missingMonths.length > 0 || zeroRatio >= highZeroRatioThreshold) {
+  } else if (
+    missingMonths.length > 0
+    || notListedMonths.length > 0
+    || zeroRatio >= highZeroRatioThreshold
+  ) {
     status = "warning";
   }
 
@@ -214,7 +284,15 @@ function calculateProductQuality(product, rows = [], duplicatePeriods = [], opti
   }
 
   if (missingMonths.length > 0) {
-    messages.push(`${missingMonths.length} bulan hilang`);
+    messages.push(`${missingMonths.length} bulan memiliki nilai stok yang hilang`);
+  }
+
+  if (notListedMonths.length > 0) {
+    messages.push(`${notListedMonths.length} bulan produk tidak tercantum pada sumber`);
+  }
+
+  if (notActiveMonths.length > 0) {
+    messages.push(`${notActiveMonths.length} bulan berada di luar periode aktif produk`);
   }
 
   if (zeroRatio >= highZeroRatioThreshold && observationCount > 0) {
@@ -235,8 +313,16 @@ function calculateProductQuality(product, rows = [], duplicatePeriods = [], opti
     observation_count: observationCount,
     period_start: validObservations[0]?.periode || null,
     period_end: validObservations[validObservations.length - 1]?.periode || null,
+    is_active: productIsActive,
+    active_from: normalizeLifecyclePeriod(product.active_from),
+    active_until: normalizeLifecyclePeriod(product.active_until),
+    expected_period_count: expectedPeriods.length,
     missing_month_count: missingMonths.length,
     missing_months: missingMonths,
+    not_listed_month_count: notListedMonths.length,
+    not_listed_months: notListedMonths,
+    not_active_month_count: notActiveMonths.length,
+    not_active_months: notActiveMonths,
     zero_month_count: zeroMonthCount,
     zero_ratio: roundMetric(zeroRatio),
     average_stock: roundMetric(averageStock),
@@ -246,7 +332,7 @@ function calculateProductQuality(product, rows = [], duplicatePeriods = [], opti
     stock_change_count: countStockChanges(validObservations),
     has_duplicate_periods: hasDuplicatePeriods,
     duplicate_periods: normalizedDuplicatePeriods,
-    eligible: observationCount >= minObservationCount,
+    eligible: productIsActive && observationCount >= minObservationCount,
     status,
     messages,
   };
@@ -254,7 +340,7 @@ function calculateProductQuality(product, rows = [], duplicatePeriods = [], opti
 
 async function getProductQuality(db, produkId, options = {}) {
   const productResult = await db.query(
-    "SELECT id, nama_produk FROM produk WHERE id=$1",
+    "SELECT id, nama_produk, is_active, active_from, active_until FROM produk WHERE id=$1",
     [produkId],
   );
 
@@ -300,7 +386,8 @@ async function getInventoryHistory(db, produkId, filters = {}) {
 
   const productResult = await db.query(
     `
-      SELECT id, nama_produk, stok, stok_minimum
+      SELECT id, nama_produk, stok, stok_minimum,
+             is_active, active_from, active_until
       FROM produk
       WHERE id=$1
     `,
@@ -357,7 +444,11 @@ async function getInventoryHistory(db, produkId, filters = {}) {
 
 async function getQualitySummary(db, options = {}) {
   const productResult = await db.query(
-    "SELECT id, nama_produk FROM produk ORDER BY id",
+    `
+      SELECT id, nama_produk, is_active, active_from, active_until
+      FROM produk
+      ORDER BY id
+    `,
   );
   const historyResult = await db.query(
     `
@@ -416,7 +507,11 @@ async function getQualitySummary(db, options = {}) {
       produk_id: product.produk_id,
       nama_produk: product.nama_produk,
       observation_count: product.observation_count,
+      is_active: product.is_active,
+      active_from: product.active_from,
+      active_until: product.active_until,
       missing_month_count: product.missing_month_count,
+      not_listed_month_count: product.not_listed_month_count,
       zero_ratio: product.zero_ratio,
       eligible: product.eligible,
       status: product.status,
@@ -429,6 +524,8 @@ module.exports = {
   buildInventoryHistoryResponse,
   calculateProductQuality,
   createMonthRange,
+  deriveExpectedPeriods,
+  filterPeriodsByLifecycle,
   getProductQuality,
   getInventoryHistory,
   getQualitySummary,

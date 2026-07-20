@@ -38,6 +38,9 @@ const Produk = () => {
   const [harga, setHarga] = useState("");
   const [stokMinimum, setStokMinimum] = useState("");
   const [kategoriId, setKategoriId] = useState("");
+  const [isActive, setIsActive] = useState(true);
+  const [activeFrom, setActiveFrom] = useState("");
+  const [activeUntil, setActiveUntil] = useState("");
   const [editId, setEditId] = useState(null);
 
   
@@ -81,6 +84,9 @@ const Produk = () => {
         harga,
         stok_minimum: stokMinimum,
         kategori_id: kategoriId,
+        is_active: isActive,
+        active_from: activeFrom || null,
+        active_until: activeUntil || null,
       });
       resetForm();
       setIsCreateOpen(false);
@@ -100,7 +106,10 @@ const Produk = () => {
     setNama(item.nama_produk);
     setHarga(item.harga);
     setStokMinimum(item.stok_minimum);
-    setKategoriId(item.kategori_id);
+    setKategoriId(String(item.kategori_id));
+    setIsActive(item.is_active !== false);
+    setActiveFrom(item.active_from ? String(item.active_from).slice(0, 7) : "");
+    setActiveUntil(item.active_until ? String(item.active_until).slice(0, 7) : "");
     setIsEditOpen(true);
   };
 
@@ -113,6 +122,9 @@ const Produk = () => {
         harga,
         stok_minimum: stokMinimum,
         kategori_id: kategoriId,
+        is_active: isActive,
+        active_from: activeFrom || null,
+        active_until: activeUntil || null,
       });
       resetForm();
       setIsEditOpen(false);
@@ -155,6 +167,9 @@ const Produk = () => {
     setHarga("");
     setStokMinimum("");
     setKategoriId("");
+    setIsActive(true);
+    setActiveFrom("");
+    setActiveUntil("");
   };
 
   return (
@@ -184,6 +199,20 @@ const Produk = () => {
                 render: (row) => `Rp ${Number(row.harga).toLocaleString("id-ID")}`,
               },
               { key: "stok_minimum", label: "Stok Minimum" },
+              {
+                key: "is_active",
+                label: "Status",
+                render: (row) => row.is_active ? "Aktif" : "Tidak Aktif",
+              },
+              {
+                key: "periode_aktif",
+                label: "Periode Aktif",
+                render: (row) => {
+                  const start = row.active_from ? String(row.active_from).slice(0, 7) : "-";
+                  const end = row.active_until ? String(row.active_until).slice(0, 7) : "sekarang";
+                  return `${start} s.d. ${end}`;
+                },
+              },
               {
                 key: "aksi",
                 label: "Aksi",
@@ -264,6 +293,35 @@ const Produk = () => {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium leading-none">Aktif Sejak</label>
+                  <Input
+                    type="month"
+                    value={activeFrom}
+                    onChange={(e) => setActiveFrom(e.target.value)}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium leading-none">Aktif Sampai</label>
+                  <Input
+                    type="month"
+                    value={activeUntil}
+                    min={activeFrom || undefined}
+                    onChange={(e) => setActiveUntil(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={isActive}
+                  onChange={(e) => setIsActive(e.target.checked)}
+                  className="h-4 w-4"
+                />
+                Produk aktif
+              </label>
             </div>
             <div className="flex justify-end gap-3 pt-4 border-t">
               <Button type="button" variant="outline" onClick={() => setIsCreateOpen(false)}>
@@ -333,6 +391,35 @@ const Produk = () => {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium leading-none">Aktif Sejak</label>
+                  <Input
+                    type="month"
+                    value={activeFrom}
+                    onChange={(e) => setActiveFrom(e.target.value)}
+                  />
+                </div>
+                <div className="grid gap-2">
+                  <label className="text-sm font-medium leading-none">Aktif Sampai</label>
+                  <Input
+                    type="month"
+                    value={activeUntil}
+                    min={activeFrom || undefined}
+                    onChange={(e) => setActiveUntil(e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm font-medium">
+                <input
+                  type="checkbox"
+                  checked={isActive}
+                  onChange={(e) => setIsActive(e.target.checked)}
+                  className="h-4 w-4"
+                />
+                Produk aktif
+              </label>
             </div>
             <div className="flex justify-end gap-3 pt-4 border-t">
               <Button type="button" variant="outline" onClick={() => setIsEditOpen(false)}>

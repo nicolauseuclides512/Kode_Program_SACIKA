@@ -1,14 +1,6 @@
 const jwt = require("jsonwebtoken");
+const { getJwtSecret } = require("../config/security");
 
-function getJwtSecret() {
-  const secret = process.env.JWT_SECRET?.trim();
-
-  if (!secret) {
-    throw new Error("JWT_SECRET belum diatur pada environment backend.");
-  }
-
-  return secret;
-}
 
 function extractBearerToken(authHeader) {
   if (typeof authHeader !== "string") {

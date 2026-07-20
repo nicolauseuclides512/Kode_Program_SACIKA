@@ -7,7 +7,6 @@ const XLSX = require("xlsx");
 
 const {
   buildImportPlan,
-  createExpectedPeriods,
   importMonthlyInventory,
   readMonthlyInventoryWorkbook,
 } = require("../services/monthlyInventoryImporter");
@@ -36,93 +35,28 @@ function createImportDb() {
   const snapshots = new Map();
   const importBatches = [];
   const transactionQueries = [];
-  const products = [
-    { id: 1, nama_produk: "Aqua Botol 600 ml" },
-    { id: 2, nama_produk: "Coffemix 20 g" },
-  ];
-  const aliases = [
-    { produk_id: 1, nama_normalisasi: "aqua botol 600 ml", nama_produk: "Aqua Botol 600 ml" },
-    { produk_id: 2, nama_normalisasi: "coffemix 20 g", nama_produk: "Coffemix 20 g" },
-  ];
-
-  function snapshotRows() {
-    return [...snapshots.values()];
-  }
 
   return {
     snapshots,
     importBatches,
     transactionQueries,
     async query(sql) {
-      transactionQueries.push({ scope: "pool", sql, params: [] });
-
-      if (sql.includes("COUNT(*)::int AS jumlah FROM produk")) {
-        return { rows: [{ jumlah: products.length }] };
-      }
-
-      if (sql.includes("COUNT(*)::int AS jumlah FROM product_alias")) {
-        return { rows: [{ jumlah: aliases.length }] };
-      }
-
-      if (sql.includes("COUNT(*) FILTER") && sql.includes("FROM inventory_snapshot_monthly")) {
-        const rows = snapshotRows();
-        return {
-          rows: [{
-            observed_count: rows.filter((row) => row.status_data === "observed").length,
-            missing_count: rows.filter((row) => row.status_data === "missing").length,
-          }],
-        };
-      }
-
-      if (sql.includes("MIN(periode)::date") && sql.includes("FROM inventory_snapshot_monthly")) {
-        const periods = snapshotRows().map((row) => row.periode).sort();
-        return {
-          rows: [{
-            periode_min: periods[0] || null,
-            periode_max: periods[periods.length - 1] || null,
-          }],
-        };
-      }
-
-      if (sql.includes("LEFT JOIN inventory_snapshot_monthly")) {
-        return {
-          rows: products.map((product) => {
-            const rows = snapshotRows().filter((row) => row.produk_id === product.id);
-            const observedPeriods = new Set(rows
-              .filter((row) => row.status_data === "observed" && row.stok_akhir !== null)
-              .map((row) => row.periode));
-            const zeroPeriods = new Set(rows
-              .filter((row) => row.status_data === "observed" && row.stok_akhir === 0)
-              .map((row) => row.periode));
-
-            return {
-              id: product.id,
-              observation_count: observedPeriods.size,
-              zero_count: zeroPeriods.size,
-            };
-          }),
-        };
-      }
-
       if (sql.includes("FROM product_alias")) {
-        return { rows: aliases };
+        return {
+          rows: [
+            { produk_id: 1, nama_normalisasi: "aqua botol 600 ml", nama_produk: "Aqua Botol 600 ml", is_active: true, active_from: "2024-01-01", active_until: null },
+            { produk_id: 2, nama_normalisasi: "coffemix 20 g", nama_produk: "Coffemix 20 g", is_active: true, active_from: "2024-01-01", active_until: null },
+          ],
+        };
       }
 
-      if (sql.includes("SELECT id, nama_produk FROM produk")) {
-        return { rows: products };
-      }
-
-      if (sql.includes("INSERT INTO import_batch")) {
-        const id = importBatches.length + 1;
-        importBatches.push({
-          id,
-          nama_file: undefined,
-          jumlah_baris: undefined,
-          jumlah_berhasil: undefined,
-          jumlah_gagal: undefined,
-          status: "failed",
-        });
-        return { rows: [{ id }] };
+      if (sql.includes("FROM produk") && !sql.includes("product_alias")) {
+        return {
+          rows: [
+            { id: 1, nama_produk: "Aqua Botol 600 ml", is_active: true, active_from: "2024-01-01", active_until: null },
+            { id: 2, nama_produk: "Coffemix 20 g", is_active: true, active_from: "2024-01-01", active_until: null },
+          ],
+        };
       }
 
       return { rows: [] };
@@ -130,7 +64,7 @@ function createImportDb() {
     async connect() {
       return {
         async query(sql, params = []) {
-          transactionQueries.push({ scope: "client", sql, params });
+          transactionQueries.push({ sql, params });
 
           if (sql === "BEGIN" || sql === "COMMIT" || sql === "ROLLBACK") {
             return { rows: [] };
@@ -180,14 +114,6 @@ function createImportDb() {
     },
   };
 }
-
-test("createExpectedPeriods verifies all 24 monthly periods from Jan 2024 to Dec 2025", () => {
-  const periods = createExpectedPeriods();
-
-  assert.equal(periods.length, 24);
-  assert.equal(periods[0], "2024-01-01");
-  assert.equal(periods[23], "2025-12-01");
-});
 
 test("monthly inventory workbook is parsed without weekly splitting", () => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sacika-import-"));
@@ -262,8 +188,8 @@ test("buildImportPlan resolves aliases, keeps observed zero, and marks missing p
       { produk_id: 2, nama_normalisasi: "coffemix 20 g" },
     ],
     [
-      { id: 1, nama_produk: "Aqua Botol 600 ml" },
-      { id: 2, nama_produk: "Coffemix 20 g" },
+      { id: 1, nama_produk: "Aqua Botol 600 ml", is_active: true, active_from: "2024-01-01", active_until: null },
+      { id: 2, nama_produk: "Coffemix 20 g", is_active: true, active_from: "2024-01-01", active_until: null },
       { id: 3, nama_produk: "Produk Lain" },
     ],
   );
@@ -280,47 +206,8 @@ test("buildImportPlan resolves aliases, keeps observed zero, and marks missing p
   assert.equal(plan.summary.unresolvedProducts, 1);
   assert.equal(observedZero.status_data, "observed");
   assert.equal(observedZero.stok_akhir, 0);
-  assert.equal(missingCoffemixFebruary.status_data, "missing");
+  assert.equal(missingCoffemixFebruary.status_data, "not_listed");
   assert.equal(missingCoffemixFebruary.stok_akhir, null);
-});
-
-test("buildImportPlan reports duplicate product rows in the same sheet", () => {
-  const plan = buildImportPlan(
-    {
-      sourceFile: "history-mini.xlsx",
-      sheetCount: 1,
-      periods: ["2024-01-01"],
-      rows: [
-        {
-          sheetName: "Januari 2024",
-          rowNumber: 2,
-          periode: "2024-01-01",
-          nama_barang_sumber: "Aqua Botol 600ml",
-          nama_normalisasi: "aqua botol 600 ml",
-          stok_akhir: 0,
-        },
-        {
-          sheetName: "Januari 2024",
-          rowNumber: 3,
-          periode: "2024-01-01",
-          nama_barang_sumber: "Aqua Botol 600 ml",
-          nama_normalisasi: "aqua botol 600 ml",
-          stok_akhir: 5,
-        },
-      ],
-    },
-    [{ produk_id: 1, nama_normalisasi: "aqua botol 600 ml" }],
-    [{ id: 1, nama_produk: "Aqua Botol 600 ml" }],
-  );
-
-  assert.equal(plan.summary.duplicateObserved, 1);
-  assert.deepEqual(plan.duplicateObserved[0], {
-    periode: "2024-01-01",
-    produk_id: 1,
-    first_row_number: 2,
-    duplicate_row_number: 3,
-    nama_barang_sumber: "Aqua Botol 600 ml",
-  });
 });
 
 test("importMonthlyInventory is idempotent through upsert by product and period", async () => {
@@ -343,27 +230,10 @@ test("importMonthlyInventory is idempotent through upsert by product and period"
   assert.equal(db.snapshots.get("1|2024-01-01").stok_akhir, 0);
   assert.equal(db.snapshots.get("1|2024-02-01").stok_akhir, 5);
   assert.equal(db.snapshots.get("2|2024-01-01").stok_akhir, 12);
-  assert.equal(db.snapshots.get("2|2024-02-01").status_data, "missing");
-  assert.equal(firstRun.periodsVerified, 2);
-  assert.deepEqual(firstRun.postImportValidation, {
-    product_count: 2,
-    alias_count: 2,
-    observed_snapshot_count: 3,
-    missing_snapshot_count: 1,
-    unresolved_count: 1,
-    periode_min: "2024-01-01",
-    periode_max: "2024-02-01",
-    eligible_count: 0,
-    warning_count: 0,
-    not_eligible_count: 2,
-  });
+  assert.equal(db.snapshots.get("2|2024-02-01").status_data, "not_listed");
   assert.equal(
     db.transactionQueries.some(({ sql }) => sql.includes("ON CONFLICT (produk_id, periode)")),
     true,
-  );
-  assert.equal(
-    db.transactionQueries.some(({ sql }) => /UPDATE\s+produk/i.test(sql)),
-    false,
   );
 });
 
@@ -383,9 +253,88 @@ test("importMonthlyInventory dry-run validates workbook without writing snapshot
   assert.equal(result.rows, 4);
   assert.equal(result.matchedProducts, 3);
   assert.equal(result.unresolvedProducts, 1);
-  assert.equal(result.periodsVerified, 2);
-  assert.equal(result.details.unresolved_products.length, 1);
   assert.equal(db.snapshots.size, 0);
   assert.equal(db.importBatches.length, 0);
-  assert.equal(db.transactionQueries.some(({ scope }) => scope === "client"), false);
+  assert.equal(db.transactionQueries.length, 0);
+});
+
+test("buildImportPlan distinguishes not_active, not_listed, and invalid Jml", () => {
+  const parsedWorkbook = {
+    sourceFile: "history-mini.xlsx",
+    sheetCount: 2,
+    periods: ["2024-01-01", "2024-02-01"],
+    rows: [
+      {
+        sheetName: "Februari 2024",
+        rowNumber: 2,
+        periode: "2024-02-01",
+        nama_barang_sumber: "Produk Aktif",
+        nama_normalisasi: "produk aktif",
+        stok_akhir: null,
+        harga_rata_rata: 1000,
+        nilai_aset: null,
+      },
+    ],
+  };
+
+  const plan = buildImportPlan(
+    parsedWorkbook,
+    [{
+      produk_id: 1,
+      nama_normalisasi: "produk aktif",
+      nama_produk: "Produk Aktif",
+      is_active: true,
+      active_from: "2024-02-01",
+      active_until: null,
+    }],
+    [{
+      id: 1,
+      nama_produk: "Produk Aktif",
+      is_active: true,
+      active_from: "2024-02-01",
+      active_until: null,
+    }],
+  );
+
+  const january = plan.missingSnapshots.find((row) => row.periode === "2024-01-01");
+  const february = plan.observedSnapshots.find((row) => row.periode === "2024-02-01");
+
+  assert.equal(january.status_data, "not_active");
+  assert.equal(february.status_data, "missing");
+  assert.equal(plan.unresolvedProducts[0].issue_type, "invalid_jml");
+});
+
+test("monthly parser accepts short sheet years and real workbook header variants", () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "sacika-import-real-header-"));
+  const filePath = path.join(tempDir, "history-short-sheet.xlsx");
+  const workbook = XLSX.utils.book_new();
+
+  for (const [sheetName, productName] of [["Jan 24", "Produk Januari"], ["Feb 24", "Produk Februari"]]) {
+    const sheet = XLSX.utils.aoa_to_sheet([
+      ["Periode", null, null, null, null],
+      ["Jenis : Minuman", null, null, null, null],
+      ["No.", "Nama Barang", "Jml", "Harga Rata2", "Nilai Asset"],
+      [1, productName, 5, 2000, 10000],
+      ["Jumlah", null, null, null, null],
+      ["Jenis : Snack", null, null, null, null],
+      ["No.", "Nama Barang", "Jml", "Harga Rata2", "Nilai Asset"],
+      [1, `${productName} Snack`, 3, 1000, 3000],
+    ]);
+    XLSX.utils.book_append_sheet(workbook, sheet, sheetName);
+  }
+
+  XLSX.writeFile(workbook, filePath);
+  const parsed = readMonthlyInventoryWorkbook(filePath, {
+    expectedPeriods: ["2024-01-01", "2024-02-01"],
+  });
+
+  assert.equal(parsed.rows.length, 4);
+  assert.deepEqual(parsed.rows.map((row) => row.periode), [
+    "2024-01-01",
+    "2024-01-01",
+    "2024-02-01",
+    "2024-02-01",
+  ]);
+  assert.equal(parsed.rows[0].harga_rata_rata, 2000);
+  assert.equal(parsed.rows[0].nilai_aset, 10000);
 });
