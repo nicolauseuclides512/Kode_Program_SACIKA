@@ -1,31 +1,63 @@
+const path = require("node:path");
+const { createScriptPool, backendRoot } = require("./lib/database");
 const {
-  createPoolFromEnv,
-  getMigrationStatus,
-  loadBackendEnv,
-  sanitizeMessage,
-} = require("./migrationRunner");
+  ensureSchemaMigrations,
+  listUpMigrations,
+  readAppliedMigrations,
+} = require("./lib/migrationUtils");
 
 async function main() {
-  loadBackendEnv();
-  const pool = createPoolFromEnv();
+  const migrationsDir = path.join(backendRoot, "migrations");
+  const migrations = listUpMigrations(migrationsDir);
+  const pool = createScriptPool();
+  const client = await pool.connect();
 
   try {
-    const rows = await getMigrationStatus({ pool });
-    console.log("Status migration:");
+    await ensureSchemaMigrations(client);
+    const appliedRows = await readAppliedMigrations(client);
+    const appliedByName = new Map(
+      appliedRows.map((row) => [row.migration_name, row]),
+    );
 
-    for (const row of rows) {
-      console.log(`${row.status.padEnd(12)} ${row.migration_name}`);
+    let hasProblem = false;
+
+    console.log("STATUS\tMIGRATION");
+
+    for (const migration of migrations) {
+      const existing = appliedByName.get(migration.name);
+
+      if (!existing) {
+        console.log(`PENDING\t${migration.name}`);
+        continue;
+      }
+
+      if (existing.checksum !== migration.checksum) {
+        console.log(`CHANGED\t${migration.name}`);
+        hasProblem = true;
+        continue;
+      }
+
+      console.log(`APPLIED\t${migration.name}`);
     }
-  } catch (error) {
-    console.error(sanitizeMessage(error.message));
-    process.exitCode = 1;
+
+    const localNames = new Set(migrations.map((migration) => migration.name));
+    for (const row of appliedRows) {
+      if (!localNames.has(row.migration_name)) {
+        console.log(`MISSING_FILE\t${row.migration_name}`);
+        hasProblem = true;
+      }
+    }
+
+    if (hasProblem) {
+      process.exitCode = 1;
+    }
   } finally {
+    client.release();
     await pool.end();
   }
 }
 
-if (require.main === module) {
-  main();
-}
-
-module.exports = { main };
+main().catch((error) => {
+  console.error("Pemeriksaan migration gagal:", error.message);
+  process.exitCode = 1;
+});

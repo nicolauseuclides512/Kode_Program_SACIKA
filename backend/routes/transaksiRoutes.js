@@ -1,7 +1,10 @@
 const express = require("express");
+const transaksiController = require("../controllers/transaksiController");
+const { allowRoles, verifyToken } = require("../middleware/authMiddleware");
+
 const router = express.Router();
 
-const transaksiController = require("../controllers/transaksiController");
+router.use(verifyToken, allowRoles("admin", "staff"));
 
 router.get("/", transaksiController.getTransaksi);
 router.post("/", transaksiController.tambahTransaksi);

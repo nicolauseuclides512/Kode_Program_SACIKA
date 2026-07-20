@@ -1,18 +1,24 @@
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
-
 const db = require("../config/database");
 
-function buildLoginUser(user) {
-  return {
-    id: user.id,
-    nama: user.nama,
-    username: user.username,
-  };
+function normalizeUsername(value) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function getJwtSecret() {
+  const secret = process.env.JWT_SECRET?.trim();
+
+  if (!secret) {
+    throw new Error("JWT_SECRET belum diatur pada environment backend.");
+  }
+
+  return secret;
 }
 
 exports.login = async (req, res) => {
-  const { username, password } = req.body || {};
+  const username = normalizeUsername(req.body?.username);
+  const password = typeof req.body?.password === "string" ? req.body.password : "";
 
   if (!username || !password) {
     return res.status(400).json({
@@ -23,7 +29,7 @@ exports.login = async (req, res) => {
   try {
     const result = await db.query(
       `
-        SELECT id, nama, username, password_hash, is_active
+        SELECT id, nama, username, password_hash, role, is_active
         FROM pengguna
         WHERE LOWER(BTRIM(username)) = LOWER(BTRIM($1))
         LIMIT 1
@@ -33,23 +39,23 @@ exports.login = async (req, res) => {
 
     if (result.rows.length === 0) {
       return res.status(401).json({
-        message: "User tidak ditemukan",
+        message: "Username atau password salah",
       });
     }
 
     const user = result.rows[0];
 
-    if (user.is_active === false) {
+    if (!user.is_active) {
       return res.status(403).json({
-        message: "Pengguna tidak aktif",
+        message: "Akun tidak aktif. Hubungi administrator.",
       });
     }
 
-    const passwordValid = await bcrypt.compare(password, user.password_hash || "");
+    const passwordMatches = await bcrypt.compare(password, user.password_hash);
 
-    if (!passwordValid) {
+    if (!passwordMatches) {
       return res.status(401).json({
-        message: "Password salah",
+        message: "Username atau password salah",
       });
     }
 
@@ -57,22 +63,30 @@ exports.login = async (req, res) => {
       {
         id: user.id,
         username: user.username,
+        role: user.role,
       },
-      process.env.JWT_SECRET,
-      { expiresIn: "1d" },
+      getJwtSecret(),
+      {
+        expiresIn: process.env.JWT_EXPIRES_IN || "1d",
+        issuer: "sacika-backend",
+        audience: "sacika-frontend",
+      },
     );
 
     return res.json({
       message: "Login berhasil",
-      user: buildLoginUser(user),
+      user: {
+        id: user.id,
+        nama: user.nama,
+        username: user.username,
+        role: user.role,
+      },
       token,
     });
-  } catch (err) {
+  } catch (error) {
+    console.error("Login gagal:", error.message);
     return res.status(500).json({
-      message: "Database error",
-      error: err.message,
+      message: "Terjadi kesalahan pada server",
     });
   }
 };
-
-exports.buildLoginUser = buildLoginUser;
