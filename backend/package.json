@@ -15,7 +15,8 @@
     "bootstrap:products": "node scripts/bootstrapProductsFromWorkbook.js",
     "sync:current-stock": "node scripts/syncCurrentStockFromSnapshots.js",
     "db:check": "node scripts/checkDatabase.js",
-    "db:setup-local": "node scripts/setupLocalDatabase.js"
+    "db:setup-local": "node scripts/setupLocalDatabase.js",
+    "test:db": "node --test tests/database/*.test.js"
   },
   "keywords": [],
   "author": "",

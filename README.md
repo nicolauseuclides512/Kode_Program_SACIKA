@@ -1,4 +1,4 @@
-﻿# SACIKA - Prediksi Persediaan Bulanan
+# SACIKA - Prediksi Persediaan Bulanan
 
 SACIKA adalah sistem inventori koperasi dengan pipeline prediksi posisi persediaan akhir bulan. Sistem terbaru menggunakan histori persediaan bulanan dari Excel, memvalidasi kualitas data, memilih model forecasting di worker Flask, menyimpan hasil prediksi, lalu menampilkan risiko stok terhadap batas minimum produk.
 
@@ -245,6 +245,14 @@ cd backend
 npm test
 ```
 
+Smoke test database memakai database pengujian terpisah dari `DATABASE_URL`. Test ini akan menolak berjalan jika `TEST_DATABASE_URL` kosong atau sama dengan `DATABASE_URL`, dan akan mereset schema `public` pada database test tersebut.
+
+```powershell
+cd backend
+$env:TEST_DATABASE_URL="postgresql://USER:PASSWORD@127.0.0.1:5432/sacika_test"
+npm run test:db
+```
+
 Worker:
 
 ```bash
@@ -276,6 +284,7 @@ Backend:
 | Variable | Keterangan | Default |
 | --- | --- | --- |
 | `DATABASE_URL` | Connection string PostgreSQL. | Wajib |
+| `TEST_DATABASE_URL` | Connection string PostgreSQL khusus smoke test database; wajib berbeda dari `DATABASE_URL`. | kosong |
 | `JWT_SECRET` | Secret JWT untuk autentikasi. | Wajib |
 | `PORT` | Port backend Express. | `3001` |
 | `FORECAST_WORKER_URL` | URL worker Flask untuk forecasting. | `http://localhost:5000` |
@@ -487,6 +496,3 @@ Worker menerima deret waktu langsung dari request body. Worker tidak mengambil d
 - Prediksi penjualan baru layak dibuat dari transaksi keluar aktual yang benar-benar tercatat di sistem.
 - Produk yang belum dapat dipetakan dari Excel harus diselesaikan lewat alias/manual review.
 - Warning kualitas data tidak mengubah nilai prediksi.
-
-
-
