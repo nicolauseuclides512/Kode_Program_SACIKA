@@ -1,48 +1,19 @@
 const db = require("../config/database");
 const { createHttpError } = require("../utils/httpError");
+const { translateDatabaseError } = require("../utils/databaseErrors");
+const { assertActiveCategory } = require("../services/categoryValidationService");
+const {
+  normalizeText,
+  parseBoolean,
+  parseIntegerId,
+  parseMonthDate,
+  parseNonNegativeDecimal,
+} = require("../utils/validation");
 const {
   paginatedResponse,
   parseBooleanQuery,
   parsePagination,
 } = require("../utils/pagination");
-
-function parseNonNegativeNumber(value, fieldName, fallback = null) {
-  if (value === undefined || value === null || value === "") return fallback;
-  const parsed = Number(value);
-
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    throw createHttpError(400, `${fieldName} harus berupa angka nol atau positif`, {
-      code: `INVALID_${fieldName.toUpperCase()}`,
-    });
-  }
-
-  return parsed;
-}
-
-function parseBoolean(value, fallback = true) {
-  if (value === undefined || value === null || value === "") return fallback;
-  if (typeof value === "boolean") return value;
-  if (value === "true" || value === "1" || value === 1) return true;
-  if (value === "false" || value === "0" || value === 0) return false;
-
-  throw createHttpError(400, "is_active harus berupa boolean", {
-    code: "INVALID_PRODUCT_STATUS",
-  });
-}
-
-function parseMonthDate(value, fieldName) {
-  if (value === undefined || value === null || value === "") return null;
-  const text = String(value).trim();
-  const match = text.match(/^(\d{4})-(\d{2})(?:-01)?$/);
-
-  if (!match || Number(match[2]) < 1 || Number(match[2]) > 12) {
-    throw createHttpError(400, `${fieldName} harus berformat YYYY-MM atau YYYY-MM-01`, {
-      code: "INVALID_MONTH_DATE",
-    });
-  }
-
-  return `${match[1]}-${match[2]}-01`;
-}
 
 function validateLifecycle(activeFrom, activeUntil) {
   if (activeFrom && activeUntil && activeUntil < activeFrom) {
@@ -53,20 +24,16 @@ function validateLifecycle(activeFrom, activeUntil) {
 }
 
 function normalizeProductPayload(body = {}, current = {}) {
-  const namaProduk = String(body.nama_produk ?? current.nama_produk ?? "").trim();
-  const kategoriId = Number(body.kategori_id ?? current.kategori_id);
-
-  if (!namaProduk) {
-    throw createHttpError(400, "nama_produk wajib diisi", {
-      code: "PRODUCT_NAME_REQUIRED",
-    });
-  }
-
-  if (!Number.isInteger(kategoriId) || kategoriId <= 0) {
-    throw createHttpError(400, "kategori_id harus berupa ID kategori yang valid", {
-      code: "INVALID_CATEGORY_ID",
-    });
-  }
+  const hasCurrent = Object.keys(current).length > 0;
+  const namaProduk = normalizeText(
+    body.nama_produk !== undefined ? body.nama_produk : current.nama_produk,
+    "nama_produk",
+    { maxLength: 255 },
+  );
+  const kategoriId = parseIntegerId(
+    body.kategori_id !== undefined ? body.kategori_id : current.kategori_id,
+    "kategori_id",
+  );
 
   const activeFrom = parseMonthDate(
     body.active_from !== undefined ? body.active_from : current.active_from,
@@ -76,7 +43,11 @@ function normalizeProductPayload(body = {}, current = {}) {
     body.active_until !== undefined ? body.active_until : current.active_until,
     "active_until",
   );
-  const isActive = parseBoolean(body.is_active, current.is_active ?? true);
+  const isActive = parseBoolean(
+    body.is_active,
+    "is_active",
+    current.is_active ?? true,
+  );
   validateLifecycle(activeFrom, activeUntil);
 
   if (!isActive && !activeUntil) {
@@ -85,18 +56,31 @@ function normalizeProductPayload(body = {}, current = {}) {
     });
   }
 
+  const rawCode = body.kode_produk !== undefined
+    ? body.kode_produk
+    : current.kode_produk;
+  const kodeProduk = rawCode === undefined || rawCode === null || String(rawCode).trim() === ""
+    ? null
+    : normalizeText(rawCode, "kode_produk", { maxLength: 100 });
+
   return {
-    kode_produk: body.kode_produk !== undefined
-      ? (String(body.kode_produk || "").trim() || null)
-      : (current.kode_produk || null),
+    kode_produk: kodeProduk,
     nama_produk: namaProduk,
     kategori_id: kategoriId,
-    harga: parseNonNegativeNumber(body.harga, "harga", Number(current.harga ?? 0)),
-    stok: parseNonNegativeNumber(body.stok, "stok", Number(current.stok ?? 0)),
-    stok_minimum: parseNonNegativeNumber(
+    harga: parseNonNegativeDecimal(
+      body.harga,
+      "harga",
+      { defaultValue: hasCurrent ? current.harga : 0 },
+    ),
+    stok: parseNonNegativeDecimal(
+      body.stok,
+      "stok",
+      { defaultValue: hasCurrent ? current.stok : 0 },
+    ),
+    stok_minimum: parseNonNegativeDecimal(
       body.stok_minimum,
       "stok_minimum",
-      Number(current.stok_minimum ?? 5),
+      { defaultValue: hasCurrent ? current.stok_minimum : 5 },
     ),
     is_active: isActive,
     active_from: activeFrom,
@@ -105,23 +89,14 @@ function normalizeProductPayload(body = {}, current = {}) {
 }
 
 function translateProductError(error) {
-  if (error.statusCode) return error;
-
-  if (error.code === "23505") {
-    return createHttpError(409, "Nama atau kode produk sudah digunakan", {
-      code: "PRODUCT_CONFLICT",
-      cause: error,
-    });
-  }
-
-  if (error.code === "23503") {
-    return createHttpError(409, "Kategori produk tidak ditemukan atau data produk masih digunakan", {
-      code: "PRODUCT_REFERENCE_CONFLICT",
-      cause: error,
-    });
-  }
-
-  return error;
+  return translateDatabaseError(error, {
+    duplicateMessage: "Nama atau kode produk sudah digunakan",
+    duplicateCode: "PRODUCT_CONFLICT",
+    referenceMessage: "Produk tidak dapat diubah karena masih digunakan oleh transaksi atau histori",
+    referenceCode: "PRODUCT_STILL_IN_USE",
+    constraintMessage: "Data produk tidak memenuhi aturan sistem",
+    constraintCode: "INVALID_PRODUCT_DATA",
+  });
 }
 
 function buildProductFilters(req, params) {
@@ -140,12 +115,7 @@ function buildProductFilters(req, params) {
   if (status === "inactive") clauses.push("p.is_active=FALSE");
 
   if (req.query.kategori_id && req.query.kategori_id !== "semua") {
-    const categoryId = Number(req.query.kategori_id);
-    if (!Number.isInteger(categoryId) || categoryId <= 0) {
-      throw createHttpError(400, "kategori_id tidak valid", {
-        code: "INVALID_CATEGORY_ID",
-      });
-    }
+    const categoryId = parseIntegerId(req.query.kategori_id, "kategori_id");
     params.push(categoryId);
     clauses.push(`p.kategori_id=$${params.length}`);
   }
@@ -211,6 +181,7 @@ exports.getProduk = async (req, res, next) => {
 
 exports.getProdukById = async (req, res, next) => {
   try {
+    const id = parseIntegerId(req.params.id, "produk_id");
     const includeDeleted = req.user?.role === "admin"
       && parseBooleanQuery(req.query.include_deleted, false);
     const result = await db.query(
@@ -221,7 +192,7 @@ exports.getProdukById = async (req, res, next) => {
         WHERE p.id=$1
           AND ($2::BOOLEAN OR p.deleted_at IS NULL)
       `,
-      [req.params.id, includeDeleted],
+      [id, includeDeleted],
     );
 
     if (result.rows.length === 0) {
@@ -239,15 +210,14 @@ exports.getProdukById = async (req, res, next) => {
 exports.tambahProduk = async (req, res, next) => {
   try {
     const payload = normalizeProductPayload(req.body);
+    await assertActiveCategory(db, payload.kategori_id);
     const result = await db.query(
       `
         INSERT INTO produk (
           kode_produk, nama_produk, kategori_id, harga, stok, stok_minimum,
           is_active, active_from, active_until
         )
-        SELECT $1, $2, k.id, $4, $5, $6, $7, $8, $9
-        FROM kategori k
-        WHERE k.id=$3 AND k.deleted_at IS NULL AND k.is_active=TRUE
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         RETURNING *
       `,
       [
@@ -263,12 +233,6 @@ exports.tambahProduk = async (req, res, next) => {
       ],
     );
 
-    if (result.rows.length === 0) {
-      throw createHttpError(400, "Kategori aktif tidak ditemukan", {
-        code: "ACTIVE_CATEGORY_NOT_FOUND",
-      });
-    }
-
     return res.status(201).json({
       message: "Produk berhasil ditambahkan",
       produk: result.rows[0],
@@ -280,9 +244,10 @@ exports.tambahProduk = async (req, res, next) => {
 
 exports.updateProduk = async (req, res, next) => {
   try {
+    const id = parseIntegerId(req.params.id, "produk_id");
     const currentResult = await db.query(
       "SELECT * FROM produk WHERE id=$1 AND deleted_at IS NULL",
-      [req.params.id],
+      [id],
     );
 
     if (currentResult.rows.length === 0) {
@@ -292,15 +257,7 @@ exports.updateProduk = async (req, res, next) => {
     }
 
     const payload = normalizeProductPayload(req.body, currentResult.rows[0]);
-    const categoryResult = await db.query(
-      "SELECT id FROM kategori WHERE id=$1 AND deleted_at IS NULL AND is_active=TRUE",
-      [payload.kategori_id],
-    );
-    if (categoryResult.rows.length === 0) {
-      throw createHttpError(400, "Kategori aktif tidak ditemukan", {
-        code: "ACTIVE_CATEGORY_NOT_FOUND",
-      });
-    }
+    await assertActiveCategory(db, payload.kategori_id);
 
     const result = await db.query(
       `
@@ -327,7 +284,7 @@ exports.updateProduk = async (req, res, next) => {
         payload.is_active,
         payload.active_from,
         payload.active_until,
-        req.params.id,
+        id,
       ],
     );
 
@@ -342,6 +299,7 @@ exports.updateProduk = async (req, res, next) => {
 
 exports.deleteProduk = async (req, res, next) => {
   try {
+    const id = parseIntegerId(req.params.id, "produk_id");
     const result = await db.query(
       `
         UPDATE produk
@@ -351,7 +309,7 @@ exports.deleteProduk = async (req, res, next) => {
         WHERE id=$1 AND deleted_at IS NULL
         RETURNING id, deleted_at
       `,
-      [req.params.id],
+      [id],
     );
 
     if (result.rows.length === 0) {
@@ -371,6 +329,7 @@ exports.deleteProduk = async (req, res, next) => {
 
 exports.restoreProduk = async (req, res, next) => {
   try {
+    const id = parseIntegerId(req.params.id, "produk_id");
     const result = await db.query(
       `
         UPDATE produk
@@ -380,7 +339,7 @@ exports.restoreProduk = async (req, res, next) => {
         WHERE id=$1 AND deleted_at IS NOT NULL
         RETURNING *
       `,
-      [req.params.id],
+      [id],
     );
 
     if (result.rows.length === 0) {

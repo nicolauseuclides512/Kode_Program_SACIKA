@@ -1,274 +1,161 @@
 #!/usr/bin/env node
 
-const readline = require("node:readline/promises");
-const { spawn } = require("node:child_process");
+require("dotenv").config({ path: `${__dirname}/../.env` });
+
+const fs = require("node:fs");
 const path = require("node:path");
-
-const {
-  createPoolFromEnv,
-  loadBackendEnv,
-  sanitizeMessage,
-} = require("./migrationRunner");
-
-const BACKEND_DIR = path.join(__dirname, "..");
+const { spawnSync } = require("node:child_process");
 
 function readOption(args, name) {
-  const eqArg = args.find((arg) => arg.startsWith(`${name}=`));
-  if (eqArg) return eqArg.slice(name.length + 1);
-
+  const equalArg = args.find((arg) => arg.startsWith(`${name}=`));
+  if (equalArg) return equalArg.slice(name.length + 1);
   const index = args.indexOf(name);
-  if (index >= 0 && args[index + 1]) return args[index + 1];
-
-  return "";
+  return index >= 0 ? args[index + 1] || "" : "";
 }
 
 function parseArgs(argv) {
   const args = argv.slice(2);
-  const inventoryFile = readOption(args, "--inventory-file")
-    || process.env.INVENTORY_FILE
-    || process.env.IMPORT_FILE_PATH
-    || "";
-
   return {
-    inventoryFile,
+    inventoryFile: readOption(args, "--inventory-file"),
     commitProducts: args.includes("--commit-products"),
     importInventory: args.includes("--import-inventory"),
     syncCurrentStock: args.includes("--sync-current-stock"),
+    skipSeed: args.includes("--skip-seed"),
   };
 }
 
-function createNpmScriptArgs(scriptName, scriptArgs = []) {
-  return [
-    "run",
-    scriptName,
-    ...(scriptArgs.length > 0 ? ["--", ...scriptArgs] : []),
-  ];
-}
+function assertSafeEnvironment(env = process.env) {
+  if (String(env.NODE_ENV || "development").toLowerCase() === "production") {
+    throw new Error("db:setup-local tidak boleh dijalankan pada NODE_ENV=production.");
+  }
 
-function runNpmScript(scriptName, scriptArgs = [], options = {}) {
-  const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
-  const args = createNpmScriptArgs(scriptName, scriptArgs);
-
-  return new Promise((resolve, reject) => {
-    const child = spawn(npmCommand, args, {
-      cwd: BACKEND_DIR,
-      env: process.env,
-      stdio: options.stdio || "inherit",
-    });
-
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve({ scriptName, exitCode: code });
-        return;
-      }
-
-      reject(new Error(`Tahap ${scriptName} gagal dengan exit code ${code}`));
-    });
-  });
-}
-
-async function testDatabaseConnection() {
-  const pool = createPoolFromEnv();
-  let client;
-
-  try {
-    client = await pool.connect();
-    await client.query("SELECT 1 AS ok");
-  } finally {
-    if (client) client.release();
-    await pool.end();
+  if (!env.DATABASE_URL?.trim()) {
+    throw new Error("DATABASE_URL belum diisi pada backend/.env.");
   }
 }
 
-async function askConfirmation(message) {
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+function validateOptions(options) {
+  const mutationRequested = options.commitProducts
+    || options.importInventory
+    || options.syncCurrentStock;
 
-  try {
-    const answer = await rl.question(`${message}\nKetik YES untuk melanjutkan: `);
-    return answer.trim() === "YES";
-  } finally {
-    rl.close();
-  }
-}
-
-function createStage(scriptName, scriptArgs = []) {
-  return {
-    scriptName,
-    scriptArgs,
-    command: `npm run ${scriptName}${scriptArgs.length > 0 ? ` -- ${scriptArgs.join(" ")}` : ""}`,
-  };
-}
-
-function buildSetupStages(options) {
-  if (!options.inventoryFile) {
-    throw new Error("Path inventory wajib diisi: gunakan --inventory-file <PATH_FILE.xlsx>");
-  }
-
-  const bootstrapDryRunReport = path.resolve(BACKEND_DIR, "setup-bootstrap-products-dry-run.json");
-  const bootstrapCommitReport = path.resolve(BACKEND_DIR, "setup-bootstrap-products-commit.json");
-  const unresolvedOutput = path.resolve(BACKEND_DIR, "setup-unresolved-products.json");
-  const stockSyncReport = path.resolve(BACKEND_DIR, "setup-current-stock-sync-report.json");
-
-  const stages = [
-    createStage("db:migrate"),
-    createStage("db:seed"),
-    createStage("bootstrap:products", [
-      "--file",
-      options.inventoryFile,
-      "--dry-run",
-      "--report-output",
-      bootstrapDryRunReport,
-    ]),
-  ];
-
-  const dataChangingStages = [];
-
-  if (options.commitProducts) {
-    dataChangingStages.push(createStage("bootstrap:products", [
-      "--file",
-      options.inventoryFile,
-      "--commit",
-      "--report-output",
-      bootstrapCommitReport,
-    ]));
-  }
-
-  if (options.importInventory) {
-    dataChangingStages.push(createStage("import:inventory", [
-      "--file",
-      options.inventoryFile,
-      "--unresolved-output",
-      unresolvedOutput,
-    ]));
-  }
-
-  if (options.syncCurrentStock) {
-    dataChangingStages.push(createStage("sync:current-stock", [
-      "--commit",
-      "--report-output",
-      stockSyncReport,
-    ]));
-  }
-
-  return {
-    preflightStages: stages,
-    dataChangingStages,
-    finalStages: [createStage("db:check")],
-  };
-}
-
-function ensureSetupAllowed(env) {
-  if (env.NODE_ENV === "production") {
-    throw new Error("setup-local ditolak pada NODE_ENV=production");
-  }
-
-  if (!env.DATABASE_URL) {
-    throw new Error("DATABASE_URL belum diatur di backend/.env");
-  }
-}
-
-function summarizeOptions(options) {
-  return {
-    inventory_file: options.inventoryFile,
-    commit_products: options.commitProducts,
-    import_inventory: options.importInventory,
-    sync_current_stock: options.syncCurrentStock,
-  };
-}
-
-async function runStage(stage, runScript, logger) {
-  logger.log(`\n==> ${stage.scriptName}`);
-  logger.log(stage.command);
-  await runScript(stage.scriptName, stage.scriptArgs);
-  logger.log(`Selesai: ${stage.scriptName}`);
-
-  return {
-    stage: stage.scriptName,
-    status: "success",
-  };
-}
-
-async function runSetupLocalDatabase(options, dependencies = {}) {
-  const env = dependencies.env || process.env;
-  const logger = dependencies.logger || console;
-  const runScript = dependencies.runScript || runNpmScript;
-  const connect = dependencies.testConnection || testDatabaseConnection;
-  const confirm = dependencies.confirm || askConfirmation;
-
-  ensureSetupAllowed(env);
-  const stages = buildSetupStages(options);
-  const results = [];
-
-  logger.log("Setup database lokal SACIKA");
-  logger.log(JSON.stringify(summarizeOptions(options), null, 2));
-
-  logger.log("\n==> connection");
-  await connect();
-  logger.log("Selesai: koneksi PostgreSQL berhasil");
-  results.push({ stage: "connection", status: "success" });
-
-  for (const stage of stages.preflightStages) {
-    results.push(await runStage(stage, runScript, logger));
-  }
-
-  if (stages.dataChangingStages.length === 0) {
-    logger.log("\nMode aman: master produk, histori inventory, dan stok saat ini belum diubah.");
-    logger.log("Jalankan ulang dengan flag eksplisit jika dry-run sudah sesuai:");
-    logger.log("--commit-products --import-inventory --sync-current-stock");
-  } else {
-    const operations = stages.dataChangingStages
-      .map((stage) => `- ${stage.command}`)
-      .join("\n");
-    const approved = await confirm(
-      `Operasi berikut akan mengubah data master/histori/stok:\n${operations}`,
+  if (mutationRequested && !options.inventoryFile) {
+    throw new Error(
+      "--inventory-file wajib diisi ketika menggunakan --commit-products, "
+      + "--import-inventory, atau --sync-current-stock.",
     );
-
-    if (!approved) {
-      throw new Error("Setup dibatalkan oleh pengguna sebelum perubahan data dijalankan");
-    }
-
-    for (const stage of stages.dataChangingStages) {
-      results.push(await runStage(stage, runScript, logger));
-    }
   }
 
-  for (const stage of stages.finalStages) {
-    results.push(await runStage(stage, runScript, logger));
+  if (options.syncCurrentStock && !options.importInventory) {
+    throw new Error("--sync-current-stock harus digunakan bersama --import-inventory.");
   }
 
-  logger.log("\nRingkasan setup:");
-  for (const result of results) {
-    logger.log(`- ${result.stage}: ${result.status}`);
+  if (options.inventoryFile && !fs.existsSync(path.resolve(options.inventoryFile))) {
+    throw new Error(`File inventory tidak ditemukan: ${options.inventoryFile}`);
   }
-
-  return {
-    ok: true,
-    stages: results,
-  };
 }
 
-async function main() {
-  loadBackendEnv();
-  const options = parseArgs(process.argv);
-  await runSetupLocalDatabase(options);
+function buildSetupPlan(options) {
+  const plan = [
+    { name: "migration", script: "migrate.js", args: [] },
+  ];
+
+  if (!options.skipSeed) {
+    plan.push({ name: "seed", script: "seed.js", args: [] });
+  }
+
+  if (options.inventoryFile) {
+    const filePath = path.resolve(options.inventoryFile);
+    plan.push({
+      name: "bootstrap-products-dry-run",
+      script: "bootstrapProductsFromWorkbook.js",
+      args: ["--file", filePath, "--dry-run"],
+    });
+
+    if (options.commitProducts) {
+      plan.push({
+        name: "bootstrap-products-commit",
+        script: "bootstrapProductsFromWorkbook.js",
+        args: ["--file", filePath, "--commit"],
+      });
+    }
+
+    plan.push({
+      name: "import-inventory-dry-run",
+      script: "importMonthlyInventory.js",
+      args: ["--file", filePath, "--dry-run"],
+    });
+
+    if (options.importInventory) {
+      plan.push({
+        name: "import-inventory-commit",
+        script: "importMonthlyInventory.js",
+        args: ["--file", filePath],
+      });
+    }
+
+    if (options.syncCurrentStock) {
+      plan.push({
+        name: "sync-current-stock-dry-run",
+        script: "syncCurrentStockFromSnapshots.js",
+        args: ["--dry-run"],
+      });
+      plan.push({
+        name: "sync-current-stock-commit",
+        script: "syncCurrentStockFromSnapshots.js",
+        args: ["--commit"],
+      });
+    }
+  }
+
+  plan.push({ name: "database-health-check", script: "checkDatabase.js", args: [] });
+  return plan;
+}
+
+function runStep(step, options = {}) {
+  const scriptPath = path.join(__dirname, step.script);
+  const spawn = options.spawn || spawnSync;
+  console.log(`\n=== ${step.name} ===`);
+  const result = spawn(process.execPath, [scriptPath, ...step.args], {
+    cwd: path.resolve(__dirname, ".."),
+    env: process.env,
+    stdio: "inherit",
+  });
+
+  if (result.error) throw result.error;
+  if (result.status !== 0) {
+    throw new Error(`Tahap ${step.name} gagal dengan exit code ${result.status}.`);
+  }
+}
+
+async function main(options = parseArgs(process.argv), dependencies = {}) {
+  assertSafeEnvironment(dependencies.env || process.env);
+  validateOptions(options);
+  const plan = buildSetupPlan(options);
+
+  console.log("Rencana setup database lokal:");
+  plan.forEach((step, index) => console.log(`${index + 1}. ${step.name}`));
+
+  for (const step of plan) {
+    runStep(step, dependencies);
+  }
+
+  console.log("\nSetup database lokal selesai.");
+  return plan;
 }
 
 if (require.main === module) {
   main().catch((error) => {
-    console.error(sanitizeMessage(error.message));
+    console.error("Setup database lokal gagal:", error.message);
     process.exitCode = 1;
   });
 }
 
 module.exports = {
-  buildSetupStages,
-  createNpmScriptArgs,
-  ensureSetupAllowed,
+  assertSafeEnvironment,
+  buildSetupPlan,
   main,
   parseArgs,
-  runSetupLocalDatabase,
+  runStep,
+  validateOptions,
 };

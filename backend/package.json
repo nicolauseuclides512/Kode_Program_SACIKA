@@ -4,7 +4,8 @@
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "node --test",
+    "test": "node scripts/runTests.js unit",
+    "test:db": "node scripts/runTests.js database",
     "import:inventory": "node scripts/importMonthlyInventory.js",
     "start": "node server.js",
     "dev": "nodemon server.js",
@@ -12,6 +13,8 @@
     "db:status": "node scripts/migrationStatus.js",
     "db:rollback": "node scripts/rollbackMigration.js",
     "db:seed": "node scripts/seed.js",
+    "db:check": "node scripts/checkDatabase.js",
+    "db:setup-local": "node scripts/setupLocalDatabase.js",
     "bootstrap:products": "node scripts/bootstrapProductsFromWorkbook.js",
     "snapshot:monthly": "node scripts/createMonthlySnapshot.js",
     "sync:current-stock": "node scripts/syncCurrentStockFromSnapshots.js",

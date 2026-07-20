@@ -1,6 +1,13 @@
 const {
   refreshSalesAggregationForChanges,
 } = require("./salesAggregationService");
+const {
+  NUMERIC_18_2_MAX,
+  parseIntegerId,
+  parseIsoDate,
+  parseNonNegativeDecimal,
+  parsePositiveDecimal,
+} = require("../utils/validation");
 
 class StockTransactionError extends Error {
   constructor(statusCode, message, details = null) {
@@ -11,50 +18,43 @@ class StockTransactionError extends Error {
 }
 
 function toPositiveNumber(value, fieldName) {
-  const numericValue = Number(value);
-
-  if (!Number.isFinite(numericValue) || numericValue <= 0) {
-    throw new StockTransactionError(400, `${fieldName} harus angka positif`);
+  try {
+    return parsePositiveDecimal(value, fieldName);
+  } catch (error) {
+    throw new StockTransactionError(400, error.message, {
+      code: error.code || `INVALID_${fieldName.toUpperCase()}`,
+    });
   }
-
-  return numericValue;
 }
 
 function parseDate(value, fieldName = "tanggal") {
-  const text = String(value || "").trim();
-  const match = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!match) {
-    throw new StockTransactionError(400, `${fieldName} harus berformat YYYY-MM-DD`);
+  try {
+    return parseIsoDate(value, fieldName);
+  } catch (error) {
+    throw new StockTransactionError(400, error.message, {
+      code: error.code || `INVALID_${fieldName.toUpperCase()}`,
+    });
   }
-
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const probe = new Date(Date.UTC(year, month - 1, day));
-
-  if (
-    probe.getUTCFullYear() !== year
-    || probe.getUTCMonth() + 1 !== month
-    || probe.getUTCDate() !== day
-  ) {
-    throw new StockTransactionError(400, `${fieldName} tidak valid`);
-  }
-
-  return text;
 }
 
 function parseTransactionId(value) {
-  const transactionId = Number(value);
-  if (!Number.isInteger(transactionId) || transactionId <= 0) {
-    throw new StockTransactionError(400, "id transaksi harus integer positif");
+  try {
+    return parseIntegerId(value, "transaction_id");
+  } catch (error) {
+    throw new StockTransactionError(400, error.message, {
+      code: error.code || "INVALID_TRANSACTION_ID",
+    });
   }
-  return transactionId;
 }
 
 function parseTransactionInput(input = {}, defaults = {}) {
-  const produkId = Number(input.produk_id ?? defaults.produk_id);
-  if (!Number.isInteger(produkId) || produkId <= 0) {
-    throw new StockTransactionError(400, "produk_id harus integer positif");
+  let produkId;
+  try {
+    produkId = parseIntegerId(input.produk_id ?? defaults.produk_id, "produk_id");
+  } catch (error) {
+    throw new StockTransactionError(400, error.message, {
+      code: error.code || "INVALID_PRODUCT_ID",
+    });
   }
 
   const jenisTransaksi = input.jenis_transaksi ?? defaults.jenis_transaksi;
@@ -70,12 +70,17 @@ function parseTransactionInput(input = {}, defaults = {}) {
       ?? new Date().toISOString().split("T")[0],
   );
 
+  const roundedTotal = Math.round((jumlah * harga + Number.EPSILON) * 100) / 100;
+  const total = parseNonNegativeDecimal(roundedTotal, "total", {
+    max: NUMERIC_18_2_MAX,
+  });
+
   return {
     produk_id: produkId,
     jenis_transaksi: jenisTransaksi,
     jumlah,
     harga,
-    total: jumlah * harga,
+    total,
     tanggal,
   };
 }
@@ -161,14 +166,14 @@ async function rollbackQuietly(client) {
   }
 }
 
-async function lockProducts(client, productIds) {
+async function lockProducts(client, productIds, options = {}) {
   const ids = [...new Set(productIds.map(Number))]
     .filter((id) => Number.isInteger(id) && id > 0)
     .sort((a, b) => a - b);
 
   const result = await client.query(
     `
-      SELECT id, stok
+      SELECT id, stok, is_active, deleted_at
       FROM produk
       WHERE id = ANY($1::bigint[])
       ORDER BY id
@@ -177,17 +182,29 @@ async function lockProducts(client, productIds) {
     [ids],
   );
 
-  const products = new Map(
-    result.rows.map((row) => [Number(row.id), ensureValidStock(row.stok)]),
+  const productRows = new Map(result.rows.map((row) => [Number(row.id), row]));
+  const activeProductIds = new Set(
+    (options.activeProductIds || []).map(Number),
   );
 
   for (const id of ids) {
-    if (!products.has(id)) {
+    const row = productRows.get(id);
+    if (!row) {
       throw new StockTransactionError(404, `Produk ${id} tidak ditemukan`);
+    }
+    if (
+      activeProductIds.has(id)
+      && (row.is_active === false || row.deleted_at)
+    ) {
+      throw new StockTransactionError(409, `Produk ${id} sudah tidak aktif`, {
+        code: "PRODUCT_NOT_ACTIVE",
+      });
     }
   }
 
-  return products;
+  return new Map(
+    result.rows.map((row) => [Number(row.id), ensureValidStock(row.stok)]),
+  );
 }
 
 async function updateProductStocks(client, stockByProduct) {
@@ -223,7 +240,9 @@ async function createStockTransaction(db, input) {
 
   try {
     await client.query("BEGIN");
-    const products = await lockProducts(client, [transaction.produk_id]);
+    const products = await lockProducts(client, [transaction.produk_id], {
+      activeProductIds: [transaction.produk_id],
+    });
     const nextStock = applyStockEffect(
       products.get(transaction.produk_id),
       transaction,
@@ -298,10 +317,11 @@ async function updateStockTransaction(db, transactionIdInput, input = {}) {
       tanggal: normalizeTransactionDate(oldResult.rows[0].tanggal),
     };
     const newTransaction = parseTransactionInput(input, oldTransaction);
-    const products = await lockProducts(client, [
-      oldTransaction.produk_id,
-      newTransaction.produk_id,
-    ]);
+    const products = await lockProducts(
+      client,
+      [oldTransaction.produk_id, newTransaction.produk_id],
+      { activeProductIds: [newTransaction.produk_id] },
+    );
     const resultingStocks = new Map(products);
 
     if (oldTransaction.produk_id === newTransaction.produk_id) {

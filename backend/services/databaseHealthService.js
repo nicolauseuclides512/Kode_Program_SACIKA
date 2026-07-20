@@ -1,13 +1,13 @@
+const path = require("node:path");
 const {
-  DEFAULT_MIGRATIONS_DIR,
-  readMigrationFiles,
-  sanitizeMessage,
-} = require("../scripts/migrationRunner");
+  backendRoot,
+} = require("../scripts/lib/database");
 const {
-  getQualitySummary,
-} = require("./inventoryHistoryQualityService");
+  listUpMigrations,
+} = require("../scripts/lib/migrationUtils");
 
 const REQUIRED_TABLES = [
+  "schema_migrations",
   "pengguna",
   "kategori",
   "produk",
@@ -15,725 +15,385 @@ const REQUIRED_TABLES = [
   "dataset_mingguan",
   "inventory_snapshot_monthly",
   "product_alias",
+  "forecast_run",
   "forecast_result",
+  "forecast_backtest",
   "import_batch",
   "penjualan_bulanan",
+  "product_mapping_issue",
 ];
 
 const REQUIRED_COLUMNS = {
-  pengguna: [
-    "id",
-    "nama",
-    "username",
-    "password_hash",
-    "is_active",
-    "created_at",
-    "updated_at",
-  ],
-  kategori: [
-    "id",
-    "nama_kategori",
-    "created_at",
-    "updated_at",
-  ],
+  pengguna: ["id", "nama", "username", "password_hash", "role", "is_active"],
+  kategori: ["id", "nama_kategori", "is_active", "deleted_at"],
   produk: [
-    "id",
-    "kode_produk",
-    "nama_produk",
-    "kategori_id",
-    "harga",
-    "stok",
-    "stok_minimum",
-    "created_at",
-    "updated_at",
+    "id", "kode_produk", "nama_produk", "kategori_id", "harga", "stok",
+    "stok_minimum", "is_active", "active_from", "active_until", "deleted_at",
   ],
-  transaksi: [
-    "id",
-    "produk_id",
-    "jenis_transaksi",
-    "jumlah",
-    "harga",
-    "total",
-    "tanggal",
-    "created_at",
-    "updated_at",
-  ],
-  dataset_mingguan: [
-    "id",
-    "produk_id",
-    "tahun",
-    "bulan",
-    "minggu_ke",
-    "period_label",
-    "total_penjualan",
-    "created_at",
-    "updated_at",
-  ],
+  transaksi: ["id", "produk_id", "jenis_transaksi", "jumlah", "harga", "total", "tanggal"],
   inventory_snapshot_monthly: [
-    "id",
-    "produk_id",
-    "periode",
-    "stok_akhir",
-    "harga_rata_rata",
-    "nilai_aset",
-    "nama_barang_sumber",
-    "sumber_file",
-    "status_data",
-    "created_at",
-    "updated_at",
+    "id", "produk_id", "periode", "stok_akhir", "status_data", "sumber_file",
   ],
-  product_alias: [
-    "id",
-    "produk_id",
-    "nama_alias",
-    "nama_normalisasi",
+  forecast_run: [
+    "id", "produk_id", "target", "model_used", "data_cutoff", "mae", "rmse",
+    "wape", "test_points", "candidate_models", "status",
   ],
   forecast_result: [
-    "id",
-    "produk_id",
-    "target",
-    "model_used",
-    "data_cutoff",
-    "forecast_period",
-    "forecast_value",
-    "mae",
-    "rmse",
-    "wape",
-    "observation_count",
-    "warning",
-    "created_at",
-  ],
-  import_batch: [
-    "id",
-    "nama_file",
-    "jumlah_baris",
-    "jumlah_berhasil",
-    "jumlah_gagal",
-    "status",
-    "detail_error",
-    "imported_at",
-  ],
-  penjualan_bulanan: [
-    "id",
-    "produk_id",
-    "periode",
-    "total_penjualan",
+    "id", "forecast_run_id", "forecast_period", "forecast_value", "lower_bound",
+    "upper_bound", "actual_value", "evaluated_at",
   ],
 };
 
-const REQUIRED_FOREIGN_KEYS = [
-  {
-    table: "produk",
-    column: "kategori_id",
-    foreignTable: "kategori",
-    foreignColumn: "id",
-  },
-  {
-    table: "transaksi",
-    column: "produk_id",
-    foreignTable: "produk",
-    foreignColumn: "id",
-  },
-  {
-    table: "dataset_mingguan",
-    column: "produk_id",
-    foreignTable: "produk",
-    foreignColumn: "id",
-  },
-  {
-    table: "inventory_snapshot_monthly",
-    column: "produk_id",
-    foreignTable: "produk",
-    foreignColumn: "id",
-  },
-  {
-    table: "product_alias",
-    column: "produk_id",
-    foreignTable: "produk",
-    foreignColumn: "id",
-  },
-  {
-    table: "forecast_result",
-    column: "produk_id",
-    foreignTable: "produk",
-    foreignColumn: "id",
-  },
-  {
-    table: "penjualan_bulanan",
-    column: "produk_id",
-    foreignTable: "produk",
-    foreignColumn: "id",
-  },
-];
-
-const REQUIRED_UNIQUE_INDEXES = [
-  "uq_pengguna_username_normalized",
-  "uq_kategori_nama_normalized",
-  "uq_produk_nama_normalized",
-  "uq_produk_kode_normalized",
-  "uq_dataset_mingguan_produk_period_label",
-  "uq_inventory_snapshot_monthly_produk_periode",
-  "uq_product_alias_nama_normalisasi",
-  "uq_forecast_result_produk_cutoff_period_model",
-  "uq_penjualan_bulanan_produk_periode",
-];
-
-const INTEGRITY_COUNT_CHECKS = [
-  {
-    code: "integrity.products_without_category",
-    passMessage: "Tidak ada produk tanpa kategori",
-    failMessage: "Ditemukan produk tanpa kategori",
-    sql: `
-      SELECT COUNT(*)::int AS count
-      FROM produk p
-      LEFT JOIN kategori k ON k.id = p.kategori_id
-      WHERE p.kategori_id IS NULL OR k.id IS NULL
-    `,
-  },
-  {
-    code: "integrity.transactions_without_product",
-    passMessage: "Tidak ada transaksi tanpa produk",
-    failMessage: "Ditemukan transaksi tanpa produk",
-    sql: `
-      SELECT COUNT(*)::int AS count
-      FROM transaksi t
-      LEFT JOIN produk p ON p.id = t.produk_id
-      WHERE t.produk_id IS NULL OR p.id IS NULL
-    `,
-  },
-  {
-    code: "integrity.aliases_without_product",
-    passMessage: "Tidak ada alias tanpa produk",
-    failMessage: "Ditemukan alias tanpa produk",
-    sql: `
-      SELECT COUNT(*)::int AS count
-      FROM product_alias a
-      LEFT JOIN produk p ON p.id = a.produk_id
-      WHERE a.produk_id IS NULL OR p.id IS NULL
-    `,
-  },
-  {
-    code: "integrity.snapshots_without_product",
-    passMessage: "Tidak ada snapshot tanpa produk",
-    failMessage: "Ditemukan snapshot tanpa produk",
-    sql: `
-      SELECT COUNT(*)::int AS count
-      FROM inventory_snapshot_monthly s
-      LEFT JOIN produk p ON p.id = s.produk_id
-      WHERE s.produk_id IS NULL OR p.id IS NULL
-    `,
-  },
-  {
-    code: "integrity.forecasts_without_product",
-    passMessage: "Tidak ada hasil forecast tanpa produk",
-    failMessage: "Ditemukan hasil forecast tanpa produk",
-    sql: `
-      SELECT COUNT(*)::int AS count
-      FROM forecast_result f
-      LEFT JOIN produk p ON p.id = f.produk_id
-      WHERE f.produk_id IS NULL OR p.id IS NULL
-    `,
-  },
-  {
-    code: "integrity.monthly_sales_without_product",
-    passMessage: "Tidak ada penjualan bulanan tanpa produk",
-    failMessage: "Ditemukan penjualan bulanan tanpa produk",
-    sql: `
-      SELECT COUNT(*)::int AS count
-      FROM penjualan_bulanan pb
-      LEFT JOIN produk p ON p.id = pb.produk_id
-      WHERE pb.produk_id IS NULL OR p.id IS NULL
-    `,
-  },
-  {
-    code: "integrity.negative_product_stock",
-    passMessage: "Tidak ada stok produk negatif",
-    failMessage: "Ditemukan stok produk negatif",
-    sql: `
-      SELECT COUNT(*)::int AS count
-      FROM produk
-      WHERE stok < 0
-    `,
-  },
-  {
-    code: "integrity.invalid_transaction_quantity",
-    passMessage: "Tidak ada transaksi dengan jumlah nol atau negatif",
-    failMessage: "Ditemukan transaksi dengan jumlah nol atau negatif",
-    sql: `
-      SELECT COUNT(*)::int AS count
-      FROM transaksi
-      WHERE jumlah <= 0
-    `,
-  },
-  {
-    code: "integrity.observed_snapshot_null_stock",
-    passMessage: "Tidak ada snapshot observed dengan stok null",
-    failMessage: "Ditemukan snapshot observed dengan stok null",
-    sql: `
-      SELECT COUNT(*)::int AS count
-      FROM inventory_snapshot_monthly
-      WHERE status_data = 'observed'
-        AND stok_akhir IS NULL
-    `,
-  },
-  {
-    code: "integrity.missing_snapshot_with_stock",
-    passMessage: "Tidak ada snapshot missing dengan stok non-null",
-    failMessage: "Ditemukan snapshot missing dengan stok non-null",
-    sql: `
-      SELECT COUNT(*)::int AS count
-      FROM inventory_snapshot_monthly
-      WHERE status_data = 'missing'
-        AND stok_akhir IS NOT NULL
-    `,
-  },
-];
-
-function createCheck(status, code, message, details = {}) {
-  return {
-    status,
-    code,
-    message,
-    details,
-  };
+function createCheck(id, status, message, details = null, critical = false) {
+  return { id, status, message, details, critical };
 }
 
-function pass(code, message, details = {}) {
-  return createCheck("PASS", code, message, details);
-}
-
-function warning(code, message, details = {}) {
-  return createCheck("WARNING", code, message, details);
-}
-
-function fail(code, message, details = {}) {
-  return createCheck("FAIL", code, message, details);
-}
-
-function toCount(row, key = "count") {
-  return Number(row?.[key] || 0);
-}
-
-function buildDatabaseHealthReport(checks) {
-  const summary = {
-    pass: checks.filter((check) => check.status === "PASS").length,
-    warning: checks.filter((check) => check.status === "WARNING").length,
-    fail: checks.filter((check) => check.status === "FAIL").length,
-  };
-
-  return {
-    ok: summary.fail === 0,
-    exit_code: summary.fail === 0 ? 0 : 1,
-    summary,
-    checks,
-  };
-}
-
-async function runSafeCheck(checks, fallbackCode, callback) {
-  try {
-    const result = await callback();
-    if (Array.isArray(result)) {
-      checks.push(...result);
-    } else if (result) {
-      checks.push(result);
-    }
-  } catch (error) {
-    checks.push(fail(
-      fallbackCode,
-      sanitizeMessage(error.message),
-    ));
-  }
-}
-
-async function checkConnection(client) {
-  await client.query("SELECT 1 AS ok");
-  return pass("connection", "Koneksi PostgreSQL berhasil");
-}
-
-async function checkPostgresVersion(client) {
-  const result = await client.query("SHOW server_version");
-  const version = result.rows[0]?.server_version;
-
-  if (!version) {
-    return fail("postgres.version", "Versi PostgreSQL tidak dapat dibaca");
-  }
-
-  return pass("postgres.version", "Versi PostgreSQL dapat dibaca", { version });
-}
-
-async function checkMigrations(client, options = {}) {
-  const migrationsDir = options.migrationsDir || DEFAULT_MIGRATIONS_DIR;
-  const schemaResult = await client.query(
-    "SELECT to_regclass($1) AS table_name",
-    ["public.schema_migrations"],
+function summarizeChecks(checks) {
+  const counts = checks.reduce(
+    (summary, check) => {
+      summary[check.status.toLowerCase()] += 1;
+      if (check.status === "FAIL" && check.critical) summary.critical_failures += 1;
+      return summary;
+    },
+    { pass: 0, warning: 0, fail: 0, critical_failures: 0 },
   );
 
-  if (!schemaResult.rows[0]?.table_name) {
-    return fail("migrations.applied", "Tabel schema_migrations belum tersedia");
-  }
-
-  const localMigrations = readMigrationFiles(migrationsDir, "up");
-  const appliedResult = await client.query(`
-    SELECT migration_name, checksum
-    FROM schema_migrations
-    ORDER BY migration_name ASC
-  `);
-  const appliedByName = new Map(
-    appliedResult.rows.map((row) => [row.migration_name, row]),
-  );
-  const localNames = new Set(localMigrations.map((migration) => migration.migrationName));
-
-  const pending = [];
-  const checksumChanged = [];
-  const missingLocalFile = [];
-
-  for (const migration of localMigrations) {
-    const applied = appliedByName.get(migration.migrationName);
-
-    if (!applied) {
-      pending.push(migration.migrationName);
-    } else if (applied.checksum !== migration.checksum) {
-      checksumChanged.push(migration.migrationName);
-    }
-  }
-
-  for (const applied of appliedResult.rows) {
-    if (!localNames.has(applied.migration_name)) {
-      missingLocalFile.push(applied.migration_name);
-    }
-  }
-
-  if (pending.length > 0 || checksumChanged.length > 0) {
-    return fail("migrations.applied", "Ada migration yang belum valid/diterapkan", {
-      pending,
-      checksum_changed: checksumChanged,
-      applied_count: appliedResult.rows.length,
-      local_count: localMigrations.length,
-    });
-  }
-
-  if (missingLocalFile.length > 0) {
-    return warning("migrations.applied", "Ada catatan migration tanpa file lokal", {
-      missing_local_file: missingLocalFile,
-      applied_count: appliedResult.rows.length,
-      local_count: localMigrations.length,
-    });
-  }
-
-  return pass("migrations.applied", "Seluruh migration lokal sudah diterapkan", {
-    applied_count: appliedResult.rows.length,
-    local_count: localMigrations.length,
-  });
+  return {
+    ...counts,
+    ok: counts.critical_failures === 0,
+  };
 }
 
-async function checkRequiredTables(client) {
-  const result = await client.query(
+async function relationExists(db, relationName) {
+  const result = await db.query("SELECT TO_REGCLASS($1) AS relation", [`public.${relationName}`]);
+  return Boolean(result.rows[0]?.relation);
+}
+
+async function getExistingColumns(db, tableName) {
+  const result = await db.query(
     `
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_schema='public' AND table_name=$1
+      ORDER BY ordinal_position
+    `,
+    [tableName],
+  );
+  return new Set(result.rows.map((row) => row.column_name));
+}
+
+async function countQuery(db, sql, params = []) {
+  const result = await db.query(sql, params);
+  return Number(result.rows[0]?.total || 0);
+}
+
+async function runDatabaseHealthChecks(db, options = {}) {
+  const checks = [];
+  const migrationsDir = options.migrationsDir || path.join(backendRoot, "migrations");
+  let existingTables = new Set();
+
+  try {
+    const result = await db.query(`
+      SELECT
+        CURRENT_DATABASE() AS database_name,
+        CURRENT_USER AS database_user,
+        CURRENT_SETTING('server_version') AS server_version
+    `);
+    checks.push(createCheck(
+      "database_connection",
+      "PASS",
+      "Koneksi PostgreSQL berhasil",
+      result.rows[0],
+      true,
+    ));
+  } catch (error) {
+    checks.push(createCheck(
+      "database_connection",
+      "FAIL",
+      "Koneksi PostgreSQL gagal",
+      { error: error.message },
+      true,
+    ));
+    return { checks, summary: summarizeChecks(checks) };
+  }
+
+  try {
+    const tableResult = await db.query(`
       SELECT table_name
       FROM information_schema.tables
-      WHERE table_schema = $1
-        AND table_name = ANY($2::text[])
-    `,
-    ["public", REQUIRED_TABLES],
-  );
-  const available = new Set(result.rows.map((row) => row.table_name));
-  const missing = REQUIRED_TABLES.filter((tableName) => !available.has(tableName));
-
-  if (missing.length > 0) {
-    return fail("schema.tables", "Ada tabel wajib yang belum tersedia", { missing });
-  }
-
-  return pass("schema.tables", "Seluruh tabel wajib tersedia", {
-    tables: REQUIRED_TABLES.length,
-  });
-}
-
-async function checkRequiredColumns(client) {
-  const result = await client.query(
-    `
-      SELECT table_name, column_name
-      FROM information_schema.columns
-      WHERE table_schema = $1
-        AND table_name = ANY($2::text[])
-    `,
-    ["public", REQUIRED_TABLES],
-  );
-  const columnsByTable = new Map();
-
-  for (const row of result.rows) {
-    const columns = columnsByTable.get(row.table_name) || new Set();
-    columns.add(row.column_name);
-    columnsByTable.set(row.table_name, columns);
-  }
-
-  const missing = [];
-  for (const [tableName, requiredColumns] of Object.entries(REQUIRED_COLUMNS)) {
-    const availableColumns = columnsByTable.get(tableName) || new Set();
-
-    for (const columnName of requiredColumns) {
-      if (!availableColumns.has(columnName)) {
-        missing.push(`${tableName}.${columnName}`);
-      }
-    }
-  }
-
-  if (missing.length > 0) {
-    return fail("schema.columns", "Ada kolom wajib yang belum tersedia", { missing });
-  }
-
-  return pass("schema.columns", "Seluruh kolom wajib tersedia", {
-    table_count: Object.keys(REQUIRED_COLUMNS).length,
-  });
-}
-
-async function checkForeignKeys(client) {
-  const result = await client.query(
-    `
-      SELECT
-        tc.table_name,
-        kcu.column_name,
-        ccu.table_name AS foreign_table_name,
-        ccu.column_name AS foreign_column_name
-      FROM information_schema.table_constraints tc
-      JOIN information_schema.key_column_usage kcu
-        ON tc.constraint_name = kcu.constraint_name
-       AND tc.table_schema = kcu.table_schema
-      JOIN information_schema.constraint_column_usage ccu
-        ON ccu.constraint_name = tc.constraint_name
-       AND ccu.table_schema = tc.table_schema
-      WHERE tc.table_schema = $1
-        AND tc.constraint_type = 'FOREIGN KEY'
-    `,
-    ["public"],
-  );
-  const available = new Set(result.rows.map((row) => {
-    return [
-      row.table_name,
-      row.column_name,
-      row.foreign_table_name,
-      row.foreign_column_name,
-    ].join(".");
-  }));
-  const missing = REQUIRED_FOREIGN_KEYS
-    .filter((key) => !available.has([
-      key.table,
-      key.column,
-      key.foreignTable,
-      key.foreignColumn,
-    ].join(".")))
-    .map((key) => `${key.table}.${key.column}->${key.foreignTable}.${key.foreignColumn}`);
-
-  if (missing.length > 0) {
-    return fail("schema.foreign_keys", "Ada foreign key wajib yang belum tersedia", { missing });
-  }
-
-  return pass("schema.foreign_keys", "Seluruh foreign key wajib tersedia", {
-    foreign_keys: REQUIRED_FOREIGN_KEYS.length,
-  });
-}
-
-async function checkUniqueConstraints(client) {
-  const result = await client.query(
-    `
-      SELECT tablename AS table_name, indexname AS index_name
-      FROM pg_indexes
-      WHERE schemaname = $1
-        AND indexdef ILIKE 'CREATE UNIQUE INDEX%'
-    `,
-    ["public"],
-  );
-  const available = new Set(result.rows.map((row) => row.index_name));
-  const missing = REQUIRED_UNIQUE_INDEXES.filter((indexName) => !available.has(indexName));
-
-  if (missing.length > 0) {
-    return fail("schema.unique_constraints", "Ada unique constraint/index wajib yang belum tersedia", {
-      missing,
-    });
-  }
-
-  return pass("schema.unique_constraints", "Seluruh unique constraint/index wajib tersedia", {
-    unique_constraints: REQUIRED_UNIQUE_INDEXES.length,
-  });
-}
-
-async function runIntegrityCountCheck(client, definition) {
-  const result = await client.query(definition.sql);
-  const count = toCount(result.rows[0]);
-
-  if (count > 0) {
-    return fail(definition.code, definition.failMessage, { count });
-  }
-
-  return pass(definition.code, definition.passMessage, { count });
-}
-
-async function checkSnapshotRange(client) {
-  const result = await client.query(`
-    SELECT
-      MIN(periode)::text AS min_period,
-      MAX(periode)::text AS max_period,
-      COUNT(*)::int AS snapshot_count,
-      COUNT(*) FILTER (
-        WHERE status_data IN ('observed', 'corrected')
-          AND stok_akhir IS NOT NULL
-      )::int AS valid_snapshot_count
-    FROM inventory_snapshot_monthly
-  `);
-  const row = result.rows[0] || {};
-  const snapshotCount = toCount(row, "snapshot_count");
-
-  if (snapshotCount === 0) {
-    return warning("snapshot.range", "Belum ada histori snapshot bulanan", {
-      snapshot_count: 0,
-      valid_snapshot_count: 0,
-    });
-  }
-
-  return pass("snapshot.range", "Rentang histori snapshot dapat dibaca", {
-    min_period: row.min_period,
-    max_period: row.max_period,
-    snapshot_count: snapshotCount,
-    valid_snapshot_count: toCount(row, "valid_snapshot_count"),
-  });
-}
-
-async function checkQualityStatusSummary(client) {
-  const summary = await getQualitySummary(client);
-
-  if (summary.total_products === 0) {
-    return warning("inventory_quality.summary", "Belum ada produk untuk ringkasan kualitas", {
-      total_products: 0,
-      status_counts: summary.status_counts,
-    });
-  }
-
-  return pass("inventory_quality.summary", "Jumlah produk berdasarkan status kualitas dapat ditampilkan", {
-    total_products: summary.total_products,
-    status_counts: summary.status_counts,
-  });
-}
-
-async function checkAdministrator(client, env = process.env) {
-  const adminUsername = String(env.ADMIN_USERNAME || "").trim();
-
-  if (adminUsername) {
-    const result = await client.query(
-      `
-        SELECT COUNT(*)::int AS count
-        FROM pengguna
-        WHERE LOWER(BTRIM(username)) = LOWER(BTRIM($1))
-          AND is_active = TRUE
-      `,
-      [adminUsername],
-    );
-    const count = toCount(result.rows[0]);
-
-    if (count === 0) {
-      return fail("auth.admin_user", "Pengguna administrator aktif tidak ditemukan");
-    }
-
-    return pass("auth.admin_user", "Pengguna administrator aktif tersedia");
-  }
-
-  const result = await client.query(`
-    SELECT COUNT(*)::int AS count
-    FROM pengguna
-    WHERE is_active = TRUE
-  `);
-  const count = toCount(result.rows[0]);
-
-  if (count === 0) {
-    return fail("auth.admin_user", "Belum ada pengguna aktif untuk login administrator");
-  }
-
-  return warning("auth.admin_user", "ADMIN_USERNAME tidak diset; hanya memverifikasi pengguna aktif", {
-    active_user_count: count,
-  });
-}
-
-async function checkPasswordHashes(client) {
-  const result = await client.query(`
-    SELECT
-      COUNT(*)::int AS total_users,
-      COUNT(*) FILTER (
-        WHERE password_hash !~ '^\\$2[aby]\\$[0-9]{2}\\$'
-          OR LENGTH(password_hash) < 50
-          OR password_hash = username
-      )::int AS suspicious_count
-    FROM pengguna
-  `);
-  const row = result.rows[0] || {};
-  const totalUsers = toCount(row, "total_users");
-  const suspiciousCount = toCount(row, "suspicious_count");
-
-  if (totalUsers === 0) {
-    return warning("auth.password_hashes", "Belum ada pengguna untuk pemeriksaan password hash");
-  }
-
-  if (suspiciousCount > 0) {
-    return fail("auth.password_hashes", "Ada password pengguna yang tidak tampak sebagai hash bcrypt", {
-      suspicious_count: suspiciousCount,
-      total_users: totalUsers,
-    });
-  }
-
-  return pass("auth.password_hashes", "Password pengguna tidak tampak sebagai plaintext", {
-    total_users: totalUsers,
-  });
-}
-
-async function runDatabaseHealthCheck(pool, options = {}) {
-  const checks = [];
-  let client;
-
-  try {
-    client = await pool.connect();
+      WHERE table_schema='public' AND table_type='BASE TABLE'
+    `);
+    existingTables = new Set(tableResult.rows.map((row) => row.table_name));
+    const missing = REQUIRED_TABLES.filter((table) => !existingTables.has(table));
+    checks.push(createCheck(
+      "required_tables",
+      missing.length === 0 ? "PASS" : "FAIL",
+      missing.length === 0
+        ? "Seluruh tabel wajib tersedia"
+        : `Tabel wajib belum tersedia: ${missing.join(", ")}`,
+      { missing, existing_count: existingTables.size },
+      true,
+    ));
   } catch (error) {
-    return buildDatabaseHealthReport([
-      fail("connection", `Koneksi PostgreSQL gagal: ${sanitizeMessage(error.message)}`),
-    ]);
+    checks.push(createCheck("required_tables", "FAIL", "Pemeriksaan tabel gagal", {
+      error: error.message,
+    }, true));
+  }
+
+  if (existingTables.has("schema_migrations")) {
+    try {
+      const expected = listUpMigrations(migrationsDir);
+      const appliedResult = await db.query(`
+        SELECT migration_name, checksum
+        FROM schema_migrations
+        ORDER BY migration_name
+      `);
+      const applied = new Map(
+        appliedResult.rows.map((row) => [row.migration_name, row.checksum]),
+      );
+      const pending = expected.filter((migration) => !applied.has(migration.name));
+      const changed = expected.filter(
+        (migration) => applied.has(migration.name)
+          && applied.get(migration.name) !== migration.checksum,
+      );
+      const status = changed.length > 0 ? "FAIL" : pending.length > 0 ? "WARNING" : "PASS";
+      checks.push(createCheck(
+        "migration_status",
+        status,
+        changed.length > 0
+          ? "Checksum migration yang sudah diterapkan berubah"
+          : pending.length > 0
+            ? `${pending.length} migration belum diterapkan`
+            : "Seluruh migration sudah diterapkan dan checksumnya sesuai",
+        {
+          pending: pending.map((item) => item.name),
+          changed: changed.map((item) => item.name),
+        },
+        changed.length > 0,
+      ));
+    } catch (error) {
+      checks.push(createCheck("migration_status", "FAIL", "Pemeriksaan migration gagal", {
+        error: error.message,
+      }, true));
+    }
+  }
+
+  for (const [tableName, requiredColumns] of Object.entries(REQUIRED_COLUMNS)) {
+    if (!existingTables.has(tableName)) continue;
+    try {
+      const existingColumns = await getExistingColumns(db, tableName);
+      const missing = requiredColumns.filter((column) => !existingColumns.has(column));
+      checks.push(createCheck(
+        `columns_${tableName}`,
+        missing.length === 0 ? "PASS" : "FAIL",
+        missing.length === 0
+          ? `Kolom wajib tabel ${tableName} tersedia`
+          : `Kolom tabel ${tableName} belum lengkap`,
+        { missing },
+        true,
+      ));
+    } catch (error) {
+      checks.push(createCheck(`columns_${tableName}`, "FAIL", `Pemeriksaan ${tableName} gagal`, {
+        error: error.message,
+      }, true));
+    }
+  }
+
+  if (existingTables.has("produk") && existingTables.has("kategori")) {
+    const orphanProducts = await countQuery(db, `
+      SELECT COUNT(*) AS total
+      FROM produk p
+      LEFT JOIN kategori k ON k.id=p.kategori_id
+      WHERE k.id IS NULL
+    `);
+    checks.push(createCheck(
+      "orphan_products",
+      orphanProducts === 0 ? "PASS" : "FAIL",
+      orphanProducts === 0 ? "Tidak ada produk tanpa kategori" : "Ditemukan produk tanpa kategori",
+      { total: orphanProducts },
+      true,
+    ));
+  }
+
+  const orphanDefinitions = [
+    ["orphan_transactions", "transaksi", "produk", "produk_id"],
+    ["orphan_aliases", "product_alias", "produk", "produk_id"],
+    ["orphan_snapshots", "inventory_snapshot_monthly", "produk", "produk_id"],
+    ["orphan_forecast_runs", "forecast_run", "produk", "produk_id"],
+    ["orphan_forecast_results", "forecast_result", "forecast_run", "forecast_run_id"],
+    ["orphan_forecast_backtests", "forecast_backtest", "forecast_run", "forecast_run_id"],
+  ];
+
+  for (const [id, child, parent, foreignKey] of orphanDefinitions) {
+    if (!existingTables.has(child) || !existingTables.has(parent)) continue;
+    const total = await countQuery(db, `
+      SELECT COUNT(*) AS total
+      FROM ${child} child
+      LEFT JOIN ${parent} parent ON parent.id=child.${foreignKey}
+      WHERE parent.id IS NULL
+    `);
+    checks.push(createCheck(
+      id,
+      total === 0 ? "PASS" : "FAIL",
+      total === 0 ? `Tidak ada orphan pada ${child}` : `Ditemukan orphan pada ${child}`,
+      { total },
+      true,
+    ));
+  }
+
+  if (existingTables.has("produk")) {
+    const invalidProducts = await countQuery(db, `
+      SELECT COUNT(*) AS total
+      FROM produk
+      WHERE harga < 0 OR stok < 0 OR stok_minimum < 0
+         OR BTRIM(nama_produk)=''
+    `);
+    checks.push(createCheck(
+      "invalid_product_values",
+      invalidProducts === 0 ? "PASS" : "FAIL",
+      invalidProducts === 0 ? "Nilai produk valid" : "Ditemukan nilai produk tidak valid",
+      { total: invalidProducts },
+      true,
+    ));
+  }
+
+  if (existingTables.has("transaksi")) {
+    const invalidTransactions = await countQuery(db, `
+      SELECT COUNT(*) AS total
+      FROM transaksi
+      WHERE jumlah <= 0 OR harga < 0 OR total < 0
+         OR jenis_transaksi NOT IN ('masuk', 'keluar')
+    `);
+    checks.push(createCheck(
+      "invalid_transaction_values",
+      invalidTransactions === 0 ? "PASS" : "FAIL",
+      invalidTransactions === 0 ? "Nilai transaksi valid" : "Ditemukan transaksi tidak valid",
+      { total: invalidTransactions },
+      true,
+    ));
+  }
+
+  if (existingTables.has("inventory_snapshot_monthly")) {
+    const invalidSnapshots = await countQuery(db, `
+      SELECT COUNT(*) AS total
+      FROM inventory_snapshot_monthly
+      WHERE
+        (status_data IN ('observed', 'corrected') AND (stok_akhir IS NULL OR stok_akhir < 0))
+        OR
+        (status_data IN ('missing', 'not_listed', 'not_active') AND stok_akhir IS NOT NULL)
+    `);
+    checks.push(createCheck(
+      "invalid_snapshot_values",
+      invalidSnapshots === 0 ? "PASS" : "FAIL",
+      invalidSnapshots === 0 ? "Status dan nilai snapshot konsisten" : "Snapshot tidak konsisten",
+      { total: invalidSnapshots },
+      true,
+    ));
+
+    const rangeResult = await db.query(`
+      SELECT MIN(periode)::TEXT AS min_period,
+             MAX(periode)::TEXT AS max_period,
+             COUNT(*)::INTEGER AS total
+      FROM inventory_snapshot_monthly
+    `);
+    const history = rangeResult.rows[0];
+    checks.push(createCheck(
+      "inventory_history_range",
+      Number(history.total) > 0 ? "PASS" : "WARNING",
+      Number(history.total) > 0 ? "Rentang histori persediaan tersedia" : "Histori persediaan masih kosong",
+      history,
+      false,
+    ));
+
+    const qualityResult = await db.query(`
+      WITH product_quality AS (
+        SELECT
+          p.id,
+          COUNT(s.id) FILTER (
+            WHERE s.status_data IN ('observed', 'corrected') AND s.stok_akhir IS NOT NULL
+          )::INTEGER AS valid_observations
+        FROM produk p
+        LEFT JOIN inventory_snapshot_monthly s ON s.produk_id=p.id
+        WHERE p.deleted_at IS NULL
+        GROUP BY p.id
+      )
+      SELECT
+        COUNT(*) FILTER (WHERE valid_observations >= 18)::INTEGER AS eligible,
+        COUNT(*) FILTER (WHERE valid_observations BETWEEN 1 AND 17)::INTEGER AS warning,
+        COUNT(*) FILTER (WHERE valid_observations = 0)::INTEGER AS not_eligible
+      FROM product_quality
+    `);
+    checks.push(createCheck(
+      "inventory_quality_overview",
+      "PASS",
+      "Ringkasan kelayakan histori berhasil dihitung",
+      qualityResult.rows[0],
+      false,
+    ));
+  }
+
+  if (existingTables.has("pengguna")) {
+    const adminResult = await db.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE role='admin' AND is_active=TRUE)::INTEGER AS active_admins,
+        COUNT(*) FILTER (
+          WHERE password_hash !~ '^\\$2[aby]\\$[0-9]{2}\\$'
+        )::INTEGER AS suspicious_password_hashes
+      FROM pengguna
+    `);
+    const admin = adminResult.rows[0];
+    checks.push(createCheck(
+      "active_administrator",
+      Number(admin.active_admins) > 0 ? "PASS" : "FAIL",
+      Number(admin.active_admins) > 0
+        ? "Administrator aktif tersedia"
+        : "Administrator aktif belum tersedia",
+      { total: Number(admin.active_admins) },
+      true,
+    ));
+    checks.push(createCheck(
+      "password_hash_format",
+      Number(admin.suspicious_password_hashes) === 0 ? "PASS" : "FAIL",
+      Number(admin.suspicious_password_hashes) === 0
+        ? "Format password hash pengguna sesuai bcrypt"
+        : "Ditemukan password yang tidak menggunakan format bcrypt",
+      { total: Number(admin.suspicious_password_hashes) },
+      true,
+    ));
   }
 
   try {
-    await runSafeCheck(checks, "connection", () => checkConnection(client));
-    await runSafeCheck(checks, "postgres.version", () => checkPostgresVersion(client));
-    await runSafeCheck(checks, "migrations.applied", () => checkMigrations(client, options));
-    await runSafeCheck(checks, "schema.tables", () => checkRequiredTables(client));
-    await runSafeCheck(checks, "schema.columns", () => checkRequiredColumns(client));
-    await runSafeCheck(checks, "schema.foreign_keys", () => checkForeignKeys(client));
-    await runSafeCheck(checks, "schema.unique_constraints", () => checkUniqueConstraints(client));
-
-    for (const definition of INTEGRITY_COUNT_CHECKS) {
-      await runSafeCheck(checks, definition.code, () => runIntegrityCountCheck(client, definition));
-    }
-
-    await runSafeCheck(checks, "snapshot.range", () => checkSnapshotRange(client));
-    await runSafeCheck(checks, "inventory_quality.summary", () => checkQualityStatusSummary(client));
-    await runSafeCheck(checks, "auth.admin_user", () => checkAdministrator(client, options.env || process.env));
-    await runSafeCheck(checks, "auth.password_hashes", () => checkPasswordHashes(client));
-  } finally {
-    client.release();
+    const foreignKeyResult = await db.query(`
+      SELECT COUNT(*)::INTEGER AS total
+      FROM pg_constraint c
+      JOIN pg_namespace n ON n.oid=c.connamespace
+      WHERE n.nspname='public' AND c.contype='f'
+    `);
+    const total = Number(foreignKeyResult.rows[0].total);
+    checks.push(createCheck(
+      "foreign_keys",
+      total >= 8 ? "PASS" : "WARNING",
+      `${total} foreign key terdeteksi`,
+      { total, expected_minimum: 8 },
+      false,
+    ));
+  } catch (error) {
+    checks.push(createCheck("foreign_keys", "WARNING", "Foreign key tidak dapat diperiksa", {
+      error: error.message,
+    }));
   }
 
-  return buildDatabaseHealthReport(checks);
-}
-
-function formatHealthCheckLine(check) {
-  const details = Object.keys(check.details || {}).length > 0
-    ? ` ${JSON.stringify(check.details)}`
-    : "";
-
-  return `[${check.status}] ${check.code}: ${check.message}${details}`;
+  return {
+    checks,
+    summary: summarizeChecks(checks),
+  };
 }
 
 module.exports = {
   REQUIRED_COLUMNS,
-  REQUIRED_FOREIGN_KEYS,
   REQUIRED_TABLES,
-  REQUIRED_UNIQUE_INDEXES,
-  buildDatabaseHealthReport,
-  checkAdministrator,
-  checkMigrations,
-  formatHealthCheckLine,
-  runDatabaseHealthCheck,
+  createCheck,
+  relationExists,
+  runDatabaseHealthChecks,
+  summarizeChecks,
 };

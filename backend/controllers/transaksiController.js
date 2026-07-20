@@ -1,5 +1,7 @@
 const db = require("../config/database");
 const { createHttpError } = require("../utils/httpError");
+const { translateDatabaseError } = require("../utils/databaseErrors");
+const { parseIntegerId, parseIsoDate } = require("../utils/validation");
 const { paginatedResponse, parsePagination } = require("../utils/pagination");
 const {
   StockTransactionError,
@@ -16,7 +18,12 @@ function sendStockTransactionError(res, next, error) {
     });
   }
 
-  return next(error);
+  return next(translateDatabaseError(error, {
+    referenceMessage: "Transaksi tidak dapat diproses karena produk tidak tersedia atau data masih digunakan",
+    referenceCode: "TRANSACTION_REFERENCE_CONFLICT",
+    constraintMessage: "Data transaksi tidak memenuhi aturan sistem",
+    constraintCode: "INVALID_TRANSACTION_DATA",
+  }));
 }
 
 function buildTransactionFilters(query, params) {
@@ -33,22 +40,30 @@ function buildTransactionFilters(query, params) {
   }
 
   if (query.produk_id) {
-    const productId = Number(query.produk_id);
-    if (!Number.isInteger(productId) || productId <= 0) {
-      throw createHttpError(400, "produk_id tidak valid", {
-        code: "INVALID_PRODUCT_ID",
-      });
-    }
+    const productId = parseIntegerId(query.produk_id, "produk_id");
     params.push(productId);
     clauses.push(`t.produk_id=$${params.length}`);
   }
 
-  if (query.start_date) {
-    params.push(query.start_date);
+  const startDate = query.start_date
+    ? parseIsoDate(query.start_date, "start_date")
+    : null;
+  const endDate = query.end_date
+    ? parseIsoDate(query.end_date, "end_date")
+    : null;
+
+  if (startDate && endDate && endDate < startDate) {
+    throw createHttpError(400, "end_date tidak boleh lebih awal dari start_date", {
+      code: "INVALID_TRANSACTION_DATE_RANGE",
+    });
+  }
+
+  if (startDate) {
+    params.push(startDate);
     clauses.push(`t.tanggal >= $${params.length}`);
   }
-  if (query.end_date) {
-    params.push(query.end_date);
+  if (endDate) {
+    params.push(endDate);
     clauses.push(`t.tanggal <= $${params.length}`);
   }
 

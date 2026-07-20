@@ -1,19 +1,18 @@
 const db = require("../config/database");
 const { createHttpError } = require("../utils/httpError");
+const { translateDatabaseError } = require("../utils/databaseErrors");
+const { normalizeText, parseIntegerId } = require("../utils/validation");
 const { parseBooleanQuery } = require("../utils/pagination");
 
-function normalizeCategoryName(value) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function parseId(value) {
-  const id = Number(value);
-  if (!Number.isInteger(id) || id <= 0) {
-    throw createHttpError(400, "ID kategori tidak valid", {
-      code: "INVALID_CATEGORY_ID",
-    });
-  }
-  return id;
+function translateCategoryError(error) {
+  return translateDatabaseError(error, {
+    duplicateMessage: "Nama kategori sudah digunakan",
+    duplicateCode: "CATEGORY_CONFLICT",
+    referenceMessage: "Kategori tidak dapat diubah karena masih digunakan oleh produk",
+    referenceCode: "CATEGORY_STILL_IN_USE",
+    constraintMessage: "Data kategori tidak memenuhi aturan sistem",
+    constraintCode: "INVALID_CATEGORY_DATA",
+  });
 }
 
 exports.getKategori = async (req, res, next) => {
@@ -39,18 +38,13 @@ exports.getKategori = async (req, res, next) => {
     );
     return res.json(result.rows);
   } catch (error) {
-    return next(error);
+    return next(translateCategoryError(error));
   }
 };
 
 exports.tambahKategori = async (req, res, next) => {
   try {
-    const namaKategori = normalizeCategoryName(req.body?.nama_kategori);
-    if (!namaKategori) {
-      throw createHttpError(400, "Nama kategori harus diisi", {
-        code: "CATEGORY_NAME_REQUIRED",
-      });
-    }
+    const namaKategori = normalizeText(req.body?.nama_kategori, "nama_kategori", { maxLength: 150 });
 
     const result = await db.query(
       `
@@ -66,19 +60,14 @@ exports.tambahKategori = async (req, res, next) => {
       kategori: result.rows[0],
     });
   } catch (error) {
-    return next(error);
+    return next(translateCategoryError(error));
   }
 };
 
 exports.updateKategori = async (req, res, next) => {
   try {
-    const id = parseId(req.params.id);
-    const namaKategori = normalizeCategoryName(req.body?.nama_kategori);
-    if (!namaKategori) {
-      throw createHttpError(400, "Nama kategori harus diisi", {
-        code: "CATEGORY_NAME_REQUIRED",
-      });
-    }
+    const id = parseIntegerId(req.params.id, "kategori_id");
+    const namaKategori = normalizeText(req.body?.nama_kategori, "nama_kategori", { maxLength: 150 });
 
     const result = await db.query(
       `
@@ -101,14 +90,14 @@ exports.updateKategori = async (req, res, next) => {
       kategori: result.rows[0],
     });
   } catch (error) {
-    return next(error);
+    return next(translateCategoryError(error));
   }
 };
 
 exports.deleteKategori = async (req, res, next) => {
   const client = await db.connect();
   try {
-    const id = parseId(req.params.id);
+    const id = parseIntegerId(req.params.id, "kategori_id");
     await client.query("BEGIN");
 
     const categoryResult = await client.query(
@@ -125,17 +114,17 @@ exports.deleteKategori = async (req, res, next) => {
       `
         SELECT COUNT(*)::INTEGER AS total
         FROM produk
-        WHERE kategori_id=$1 AND deleted_at IS NULL AND is_active=TRUE
+        WHERE kategori_id=$1 AND deleted_at IS NULL
       `,
       [id],
     );
     if (Number(activeProducts.rows[0].total) > 0) {
       throw createHttpError(
         409,
-        "Kategori tidak dapat diarsipkan karena masih digunakan produk aktif",
+        "Kategori tidak dapat diarsipkan karena masih digunakan oleh produk",
         {
-          code: "CATEGORY_HAS_ACTIVE_PRODUCTS",
-          details: { active_products: Number(activeProducts.rows[0].total) },
+          code: "CATEGORY_STILL_IN_USE",
+          details: { products_in_use: Number(activeProducts.rows[0].total) },
         },
       );
     }
@@ -157,7 +146,7 @@ exports.deleteKategori = async (req, res, next) => {
     });
   } catch (error) {
     await client.query("ROLLBACK");
-    return next(error);
+    return next(translateCategoryError(error));
   } finally {
     client.release();
   }
@@ -165,7 +154,7 @@ exports.deleteKategori = async (req, res, next) => {
 
 exports.restoreKategori = async (req, res, next) => {
   try {
-    const id = parseId(req.params.id);
+    const id = parseIntegerId(req.params.id, "kategori_id");
     const result = await db.query(
       `
         UPDATE kategori
@@ -187,6 +176,6 @@ exports.restoreKategori = async (req, res, next) => {
       kategori: result.rows[0],
     });
   } catch (error) {
-    return next(error);
+    return next(translateCategoryError(error));
   }
 };

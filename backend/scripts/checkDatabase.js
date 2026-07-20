@@ -1,41 +1,34 @@
-#!/usr/bin/env node
+const { createScriptPool } = require("./lib/database");
+const { runDatabaseHealthChecks } = require("../services/databaseHealthService");
 
-const {
-  createPoolFromEnv,
-  loadBackendEnv,
-  sanitizeMessage,
-} = require("./migrationRunner");
-const {
-  formatHealthCheckLine,
-  runDatabaseHealthCheck,
-} = require("../services/databaseHealthService");
+function printCheck(check) {
+  console.log(`[${check.status.padEnd(7)}] ${check.id}: ${check.message}`);
+  if (check.details && (check.status !== "PASS" || process.argv.includes("--verbose"))) {
+    console.log(`          ${JSON.stringify(check.details)}`);
+  }
+}
 
-async function main() {
-  loadBackendEnv();
-  const pool = createPoolFromEnv();
+async function main(options = {}) {
+  const pool = options.pool || createScriptPool();
+  const shouldClose = !options.pool;
 
   try {
-    const report = await runDatabaseHealthCheck(pool);
+    const result = await runDatabaseHealthChecks(pool, options);
+    for (const check of result.checks) printCheck(check);
 
-    console.log("Database health check:");
-    for (const check of report.checks) {
-      console.log(formatHealthCheckLine(check));
-    }
-    console.log(`Summary: PASS=${report.summary.pass} WARNING=${report.summary.warning} FAIL=${report.summary.fail}`);
-
-    process.exitCode = report.exit_code;
+    console.log("\nRingkasan:", result.summary);
+    if (!result.summary.ok) process.exitCode = 1;
+    return result;
   } finally {
-    await pool.end();
+    if (shouldClose) await pool.end();
   }
 }
 
 if (require.main === module) {
   main().catch((error) => {
-    console.error(sanitizeMessage(error.message));
+    console.error("Pemeriksaan database gagal:", error.message);
     process.exitCode = 1;
   });
 }
 
-module.exports = {
-  main,
-};
+module.exports = { main, printCheck };
