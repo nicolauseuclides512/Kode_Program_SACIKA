@@ -1,17 +1,17 @@
 export const ENDPOINTS = {
-  
+
   login: "/login",
 
-  
+
   produk: "/produk",
 
-  
+
   kategori: "/kategori",
 
-  
+
   laporan: "/laporan",
 
-  
+
   transaksiMasuk: "/transaksi?jenis=masuk",
   transaksiKeluar: "/transaksi?jenis=keluar",
 
@@ -20,4 +20,6 @@ export const ENDPOINTS = {
   latestInventoryForecast: (id) => `/forecast/inventory/${id}/latest`,
   salesForecastReadiness: (id) => `/forecast/sales/${id}/readiness`,
   inventoryRisk: "/forecast/inventory-risk",
+  inventoryForecastBatch: "/forecast/inventory/batch",
+  evaluateInventoryForecasts: "/forecast/inventory/evaluate-actuals",
 };

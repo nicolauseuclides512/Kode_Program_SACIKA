@@ -11,6 +11,8 @@ test("API endpoints expose current forecast helpers without legacy weekly predic
   assert.match(source, /salesForecastReadiness/);
   assert.match(source, /\/forecast\/sales\/\$\{id\}\/readiness/);
   assert.match(source, /inventoryRisk/);
+  assert.match(source, /inventoryForecastBatch/);
+  assert.match(source, /evaluateInventoryForecasts/);
   assert.doesNotMatch(source, /prediksiDataset|prediksiChart/);
   assert.doesNotMatch(source, /\/prediksi\/|minggu=/);
 });

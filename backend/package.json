@@ -14,7 +14,9 @@
     "db:seed": "node scripts/seed.js",
     "bootstrap:products": "node scripts/bootstrapProductsFromWorkbook.js",
     "snapshot:monthly": "node scripts/createMonthlySnapshot.js",
-    "sync:current-stock": "node scripts/syncCurrentStockFromSnapshots.js"
+    "sync:current-stock": "node scripts/syncCurrentStockFromSnapshots.js",
+    "forecast:eligible-products": "node scripts/runEligibleInventoryForecasts.js",
+    "forecast:evaluate-actuals": "node scripts/evaluateForecastsAgainstActuals.js"
   },
   "keywords": [],
   "author": "",

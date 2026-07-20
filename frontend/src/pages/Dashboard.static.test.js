@@ -17,3 +17,12 @@ test("Dashboard does not present local ARIMA restock or purchase quantity recomm
   assert.doesNotMatch(source, /id_produk/);
   assert.doesNotMatch(source, /W1|W2|W3|W4/);
 });
+
+
+test("Dashboard shows forecast freshness and indicative range", () => {
+  assert.match(source, /staleInventoryRisks/);
+  assert.match(source, /Kedaluwarsa/);
+  assert.match(source, /Rentang indikatif/);
+  assert.match(source, /lower_bound/);
+  assert.match(source, /upper_bound/);
+});

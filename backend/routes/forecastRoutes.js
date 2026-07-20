@@ -15,6 +15,16 @@ router.get(
   inventoryForecastController.getSalesForecastReadiness,
 );
 router.post(
+  "/inventory/batch",
+  allowRoles("admin"),
+  inventoryForecastController.createInventoryForecastBatch,
+);
+router.post(
+  "/inventory/evaluate-actuals",
+  allowRoles("admin"),
+  inventoryForecastController.evaluateInventoryForecasts,
+);
+router.post(
   "/inventory/:produk_id",
   inventoryForecastController.createInventoryForecast,
 );

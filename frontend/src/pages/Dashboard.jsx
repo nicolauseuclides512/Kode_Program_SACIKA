@@ -85,7 +85,7 @@ const Dashboard = () => {
   const transaksiMasuk = transaksiBulan.filter((t) => t.jenis_transaksi === "masuk");
   const transaksiKeluar = transaksiBulan.filter((t) => t.jenis_transaksi === "keluar");
 
-  
+
   const previousMonth = new Date(selectedMonth);
   previousMonth.setMonth(previousMonth.getMonth() - 1);
   const transaksiBulanLalu = transaksi.filter((t) => {
@@ -103,16 +103,17 @@ const Dashboard = () => {
   const totalStok = produk.reduce((sum, item) => sum + Number(item.stok), 0);
   const stokMinimum = produk.filter((p) => Number(p.stok) <= Number(p.stok_minimum));
   const highInventoryRisks = inventoryRisk.filter((item) => item.risk === "high");
+  const staleInventoryRisks = inventoryRisk.filter((item) => item.freshness === "stale");
 
   const trendMasuk = totalMasukLalu > 0 ? (((totalMasuk - totalMasukLalu) / totalMasukLalu) * 100).toFixed(1) : 0;
   const trendKeluar = totalKeluarLalu > 0 ? (((totalKeluar - totalKeluarLalu) / totalKeluarLalu) * 100).toFixed(1) : 0;
 
-  
+
   const recentTransactions = [...transaksiBulan]
     .sort((a, b) => new Date(b.tanggal) - new Date(a.tanggal))
     .slice(0, 5);
 
-  
+
   const getWeekIndex = (dateStr) => {
     const day = new Date(dateStr).getDate();
     if (day <= 7) return 0;
@@ -134,7 +135,7 @@ const Dashboard = () => {
     weeklyKeluar[wIdx] += Number(t.jumlah);
   });
 
-  
+
   const lineChartData = {
     labels: ["Pekan 1", "Pekan 2", "Pekan 3", "Pekan 4"],
     datasets: [
@@ -152,7 +153,7 @@ const Dashboard = () => {
       {
         label: "Demand (Keluar)",
         data: weeklyKeluar,
-        borderColor: "rgb(113, 113, 122)", 
+        borderColor: "rgb(113, 113, 122)",
         backgroundColor: "rgba(113, 113, 122, 0.02)",
         tension: 0.3,
         borderWidth: 2,
@@ -263,6 +264,9 @@ const Dashboard = () => {
             <div className="mt-3 space-y-2">
               <p className="text-xs text-zinc-500 leading-relaxed">
                 Terdapat <strong>{highInventoryRisks.length} produk</strong> dengan prediksi persediaan bulan berikutnya berada di bawah batas minimum.
+                {staleInventoryRisks.length > 0 && (
+                  <> <strong>{staleInventoryRisks.length} hasil</strong> sudah kedaluwarsa dan perlu diprediksi ulang.</>
+                )}
               </p>
               <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {highInventoryRisks.slice(0, 6).map((item) => (
@@ -272,11 +276,16 @@ const Dashboard = () => {
                   >
                     <p className="text-xs font-semibold text-zinc-900 truncate">{item.nama_produk}</p>
                     <p className="text-[10px] text-zinc-400 mt-1">
-                      {item.forecast_period} | {item.model_used}
+                      {item.forecast_period} | {item.model_used} | {item.freshness === "stale" ? "Kedaluwarsa" : "Aktif"}
                     </p>
                     <p className="text-[11px] text-zinc-600 mt-1">
                       Prediksi: <strong>{formatUnit(item.forecast_value)} unit</strong> / Minimum: <strong>{formatUnit(item.stok_minimum)} unit</strong>
                     </p>
+                    {item.lower_bound !== null && item.upper_bound !== null && (
+                      <p className="text-[10px] text-zinc-400 mt-1">
+                        Rentang indikatif: {formatUnit(item.lower_bound)}–{formatUnit(item.upper_bound)} unit
+                      </p>
+                    )}
                   </div>
                 ))}
               </div>

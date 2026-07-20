@@ -42,6 +42,25 @@ ChartJS.register(
   Filler,
 );
 
+
+const FRESHNESS_COPY = {
+  current: {
+    label: "Aktif",
+    className: "bg-emerald-50 text-emerald-700 border-emerald-100",
+    description: "Hasil menggunakan snapshot terbaru yang tersedia.",
+  },
+  stale: {
+    label: "Kedaluwarsa",
+    className: "bg-amber-50 text-amber-700 border-amber-100",
+    description: "Terdapat snapshot baru setelah cutoff model. Jalankan prediksi ulang.",
+  },
+  superseded: {
+    label: "Tergantikan",
+    className: "bg-zinc-50 text-zinc-600 border-zinc-200",
+    description: "Hasil ini telah digantikan oleh forecast yang lebih baru.",
+  },
+};
+
 const STATUS_COPY = {
   not_eligible: {
     title: "Produk tidak eligible untuk forecasting",
@@ -358,10 +377,23 @@ const Prediksi = () => {
     [historyResult, forecastResult],
   );
   const riskStatus = getRiskStatus(selectedForecastValue, selectedProduk?.stok_minimum);
-  const forecastRows = (forecastResult?.forecast_periods || []).map((period, index) => ({
-    period,
-    value: toNumberOrNull(forecastResult?.forecast_values?.[index]),
-  }));
+  const forecastRows = (forecastResult?.forecast_periods || []).map((period, index) => {
+    const range = forecastResult?.forecast_ranges?.[index] || {};
+    return {
+      period,
+      value: toNumberOrNull(forecastResult?.forecast_values?.[index]),
+      lowerBound: toNumberOrNull(range.lower_bound),
+      upperBound: toNumberOrNull(range.upper_bound),
+    };
+  });
+  const selectedForecastRange = forecastRows[0] || {};
+  const freshnessCopy = FRESHNESS_COPY[forecastResult?.freshness] || FRESHNESS_COPY.current;
+  const candidateModels = Array.isArray(forecastResult?.candidate_models)
+    ? forecastResult.candidate_models
+    : [];
+  const backtestRows = Array.isArray(forecastResult?.backtest)
+    ? forecastResult.backtest
+    : [];
   const historyPeriods = historyResult?.periods || [];
   const historyCutoff = historyPeriods.length > 0
     ? historyPeriods[historyPeriods.length - 1]
@@ -483,9 +515,17 @@ const Prediksi = () => {
         <div className="space-y-6">
           <div className="rounded-xl border border-zinc-100 bg-zinc-50/60 p-4 text-xs text-zinc-600 flex items-start gap-2">
             <Info className="w-4 h-4 mt-0.5 shrink-0 text-zinc-500" />
-            <p>
-              Hasil ini merupakan estimasi posisi persediaan akhir bulan, bukan prediksi penjualan atau rekomendasi jumlah pembelian.
-            </p>
+            <div className="space-y-2">
+              <p>
+                Hasil ini merupakan estimasi posisi persediaan akhir bulan, bukan prediksi penjualan atau rekomendasi jumlah pembelian.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className={`inline-flex text-[10px] font-bold px-2 py-0.5 rounded-md border ${freshnessCopy.className}`}>
+                  Status hasil: {freshnessCopy.label}
+                </span>
+                <span className="text-[11px] text-zinc-500">{freshnessCopy.description}</span>
+              </div>
+            </div>
           </div>
 
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -565,6 +605,11 @@ const Prediksi = () => {
               <p className="text-xs text-zinc-400 mt-1">
                 Periode prediksi: {selectedForecastPeriod}
               </p>
+              {selectedForecastRange.lowerBound !== null && selectedForecastRange.upperBound !== null && (
+                <p className="text-[11px] text-zinc-500 mt-2">
+                  Rentang indikatif: <strong>{formatUnit(selectedForecastRange.lowerBound, 2)}–{formatUnit(selectedForecastRange.upperBound, 2)} unit</strong>
+                </p>
+              )}
               <span className={`inline-flex mt-3 text-[10px] font-bold px-2 py-0.5 rounded-md border ${riskStatus.className}`}>
                 {riskStatus.text}
               </span>
@@ -697,7 +742,14 @@ const Prediksi = () => {
                         className="flex items-center justify-between rounded-lg border border-zinc-100 bg-white px-3 py-2 text-xs"
                       >
                         <span className="font-semibold text-zinc-700">{row.period}</span>
-                        <span className="font-bold text-zinc-900">{formatUnit(row.value, 2)} unit</span>
+                        <div className="text-right">
+                          <span className="block font-bold text-zinc-900">{formatUnit(row.value, 2)} unit</span>
+                          {row.lowerBound !== null && row.upperBound !== null && (
+                            <span className="block text-[10px] text-zinc-400">
+                              indikatif {formatUnit(row.lowerBound, 2)}–{formatUnit(row.upperBound, 2)}
+                            </span>
+                          )}
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -720,6 +772,78 @@ const Prediksi = () => {
                 )}
               </div>
             </Card>
+          </div>
+
+          <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
+            <Card className="rounded-2xl border border-zinc-150 bg-white p-5 shadow-2xs">
+              <CardHeader className="p-0 mb-3">
+                <CardTitle className="text-base font-bold text-zinc-900">Perbandingan Kandidat Model</CardTitle>
+                <CardDescription className="text-xs text-zinc-400">Disimpan bersama setiap forecast run.</CardDescription>
+              </CardHeader>
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b text-left text-zinc-400">
+                      <th className="py-2">Model</th>
+                      <th className="py-2">MAE</th>
+                      <th className="py-2">RMSE</th>
+                      <th className="py-2">WAPE</th>
+                      <th className="py-2">Titik Uji</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {candidateModels.map((candidate, index) => (
+                      <tr key={`${candidate.model}-${index}`} className="border-b border-zinc-50">
+                        <td className="py-2 font-semibold text-zinc-800">{candidate.model}</td>
+                        <td className="py-2">{formatMetric(candidate.mae)}</td>
+                        <td className="py-2">{formatMetric(candidate.rmse)}</td>
+                        <td className="py-2">{formatMetric(candidate.wape, "%")}</td>
+                        <td className="py-2">{candidate.test_points ?? "-"}</td>
+                      </tr>
+                    ))}
+                    {candidateModels.length === 0 && (
+                      <tr><td colSpan="5" className="py-4 text-center text-zinc-400">Detail kandidat model belum tersedia.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+
+            <Card className="rounded-2xl border border-zinc-150 bg-white p-5 shadow-2xs">
+              <CardHeader className="p-0 mb-3">
+                <CardTitle className="text-base font-bold text-zinc-900">Hasil Backtesting</CardTitle>
+                <CardDescription className="text-xs text-zinc-400">Rolling-origin validation model terpilih.</CardDescription>
+              </CardHeader>
+              <div className="overflow-x-auto max-h-64">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b text-left text-zinc-400">
+                      <th className="py-2">Periode</th>
+                      <th className="py-2">Aktual</th>
+                      <th className="py-2">Prediksi</th>
+                      <th className="py-2">Error Absolut</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {backtestRows.map((row) => (
+                      <tr key={row.period} className="border-b border-zinc-50">
+                        <td className="py-2 font-semibold text-zinc-800">{row.period}</td>
+                        <td className="py-2">{formatUnit(row.actual, 2)}</td>
+                        <td className="py-2">{formatUnit(row.predicted, 2)}</td>
+                        <td className="py-2">{formatUnit(row.absolute_error ?? Math.abs(Number(row.actual) - Number(row.predicted)), 2)}</td>
+                      </tr>
+                    ))}
+                    {backtestRows.length === 0 && (
+                      <tr><td colSpan="4" className="py-4 text-center text-zinc-400">Detail backtesting belum tersedia.</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </Card>
+          </div>
+
+          <div className="rounded-xl border border-zinc-100 bg-white p-4 text-[11px] text-zinc-500">
+            Rentang indikatif dihitung dari nilai prediksi ± MAE historis dan bukan confidence interval statistik.
           </div>
         </div>
       )}

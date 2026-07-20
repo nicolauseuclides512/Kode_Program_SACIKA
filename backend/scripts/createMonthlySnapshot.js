@@ -7,6 +7,7 @@ const path = require("path");
 
 const db = require("../config/database");
 const { createMonthlySnapshots } = require("../services/monthlySnapshotService");
+const { evaluateForecastsAgainstActuals } = require("../services/forecastActualEvaluationService");
 
 function readOption(args, name) {
   const equalArg = args.find((arg) => arg.startsWith(`${name}=`));
@@ -36,7 +37,11 @@ function parseArgs(argv) {
 
 async function main() {
   const options = parseArgs(process.argv);
-  const result = await createMonthlySnapshots(db, options);
+  const snapshot = await createMonthlySnapshots(db, options);
+  const evaluation = options.commit
+    ? await evaluateForecastsAgainstActuals(db, { period: snapshot.period })
+    : null;
+  const result = { ...snapshot, forecast_evaluation: evaluation };
   const text = JSON.stringify(result, null, 2);
 
   if (options.output) {

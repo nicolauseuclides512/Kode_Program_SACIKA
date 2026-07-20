@@ -3,7 +3,12 @@ const {
   getInventoryRiskSummary,
   getLatestInventoryForecast,
   runInventoryForecast,
+  runInventoryForecastBatch,
 } = require("../services/inventoryForecastService");
+const {
+  ForecastActualEvaluationError,
+  evaluateForecastsAgainstActuals,
+} = require("../services/forecastActualEvaluationService");
 const {
   SalesForecastReadinessError,
   getMonthlySalesForecastReadiness,
@@ -77,6 +82,44 @@ function createInventoryForecastController(database = getDefaultDatabase(), opti
             ? error
             : new InventoryForecastError(500, "Gagal mengambil forecast persediaan terbaru", error.message),
           "Error fetching latest inventory forecast:",
+        );
+      }
+    },
+
+    async createInventoryForecastBatch(req, res) {
+      try {
+        const result = await runInventoryForecastBatch(database, {
+          ...options,
+          horizon: req.body?.horizon ?? req.query?.horizon,
+          concurrency: req.body?.concurrency ?? req.query?.concurrency,
+          productIds: req.body?.product_ids ?? req.query?.product_ids,
+        });
+        return res.json(result);
+      } catch (error) {
+        return sendError(
+          res,
+          error instanceof InventoryForecastError
+            ? error
+            : new InventoryForecastError(500, "Gagal menjalankan batch forecast", error.message),
+          "Error running batch inventory forecast:",
+        );
+      }
+    },
+
+    async evaluateInventoryForecasts(req, res) {
+      try {
+        const result = await evaluateForecastsAgainstActuals(database, {
+          period: req.body?.period ?? req.query?.period,
+          recalculate: req.body?.recalculate === true || req.query?.recalculate === "true",
+        });
+        return res.json(result);
+      } catch (error) {
+        return sendError(
+          res,
+          error instanceof ForecastActualEvaluationError
+            ? error
+            : new ForecastActualEvaluationError(500, "Gagal mengevaluasi forecast terhadap data aktual", error.message),
+          "Error evaluating inventory forecasts:",
         );
       }
     },

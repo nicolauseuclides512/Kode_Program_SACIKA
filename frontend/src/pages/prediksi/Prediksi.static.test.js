@@ -37,3 +37,13 @@ test("Prediksi page does not show purchase recommendation calculations", () => {
   assert.match(source, /Prediksi persediaan masih berada di atas batas minimum/);
   assert.match(source, /bukan prediksi penjualan atau rekomendasi jumlah pembelian/);
 });
+
+
+test("Prediksi page displays forecast freshness, model candidates, backtest and indicative range", () => {
+  assert.match(source, /Status hasil/);
+  assert.match(source, /Kedaluwarsa/);
+  assert.match(source, /Perbandingan Kandidat Model/);
+  assert.match(source, /Hasil Backtesting/);
+  assert.match(source, /Rentang indikatif/);
+  assert.match(source, /bukan confidence interval statistik/);
+});
