@@ -147,6 +147,36 @@ cd backend
 npm run db:check
 ```
 
+### Setup Database Lokal Windows PowerShell
+
+Script setup lokal mengorkestrasi urutan aman untuk database yang database dan user PostgreSQL-nya sudah dibuat manual. Script ini tidak membuat database, tidak membuat user PostgreSQL dengan superuser, dan akan menolak berjalan ketika `NODE_ENV=production`.
+
+Siapkan `backend/.env` terlebih dahulu dari contoh variabel yang tersedia, lalu isi nilainya di editor lokal tanpa menaruh credential ke source code:
+
+```powershell
+cd D:\Kode_Program_SACIKA\backend
+Copy-Item .env.example .env
+notepad .env
+```
+
+Jalankan mode aman terlebih dahulu. Mode ini menjalankan migration, seed, bootstrap produk dry-run, lalu `db:check`. Tanpa flag commit, script tidak mengubah master produk, histori inventory, atau stok saat ini.
+
+```powershell
+npm run db:setup-local -- --inventory-file "C:\Users\nicoe\Downloads\History Penjualan_LaporanBulanan.xlsx"
+```
+
+Setelah laporan dry-run sudah sesuai, jalankan ulang dengan flag eksplisit. Script akan meminta konfirmasi sebelum menjalankan operasi perubahan data besar.
+
+```powershell
+npm run db:setup-local -- `
+  --inventory-file "C:\Users\nicoe\Downloads\History Penjualan_LaporanBulanan.xlsx" `
+  --commit-products `
+  --import-inventory `
+  --sync-current-stock
+```
+
+Urutan yang dijalankan adalah koneksi PostgreSQL, `db:migrate`, `db:seed`, bootstrap produk dry-run, bootstrap produk commit bila diminta, import inventory bila diminta, sinkronisasi stok saat ini bila diminta, lalu `db:check`.
+
 Urutan migration saat ini:
 
 1. `202607170001_create_core_schema.up.sql`
@@ -457,5 +487,6 @@ Worker menerima deret waktu langsung dari request body. Worker tidak mengambil d
 - Prediksi penjualan baru layak dibuat dari transaksi keluar aktual yang benar-benar tercatat di sistem.
 - Produk yang belum dapat dipetakan dari Excel harus diselesaikan lewat alias/manual review.
 - Warning kualitas data tidak mengubah nilai prediksi.
+
 
 

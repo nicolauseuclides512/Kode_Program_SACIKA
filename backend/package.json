@@ -14,7 +14,8 @@
     "db:seed": "node scripts/seed.js",
     "bootstrap:products": "node scripts/bootstrapProductsFromWorkbook.js",
     "sync:current-stock": "node scripts/syncCurrentStockFromSnapshots.js",
-    "db:check": "node scripts/checkDatabase.js"
+    "db:check": "node scripts/checkDatabase.js",
+    "db:setup-local": "node scripts/setupLocalDatabase.js"
   },
   "keywords": [],
   "author": "",
